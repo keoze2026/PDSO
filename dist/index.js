@@ -8,7 +8,7 @@ const telegraf_1 = require("telegraf");
 const axios_1 = __importDefault(require("axios"));
 const p_limit_1 = __importDefault(require("p-limit"));
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8067862927:AAF15wt-h8YGfXhtdN0kOXu3MQf-zGX0gWU';
-const WEBHOOK_URL = process.env.WEBHOOK_URL || '';
+const WEBHOOK_URL = process.env.WEBHOOK_URL || 'https://tgbot-nyyq.onrender.com';
 const PORT = parseInt(process.env.PORT || '8080');
 const BASE_API = 'https://api-gateway.dialics.com/api/v1';
 const DIALICS_WORKSPACE = 'aq2O7TXNfZl7H6kjhm2LEw8OI2rJwLwD';
@@ -58,7 +58,14 @@ const buildParamsWithDate = (date, extra = {}) => {
         ...extra,
     };
 };
-const fetchAllCalls = async (workspace, token, date) => {
+const fetchAllCalls = async (workspace, token, date, useCache = false, session) => {
+    if (useCache && session?.cachedCalls && session.cachedCalls.date === date) {
+        const cacheAge = Date.now() - session.cachedCalls.timestamp;
+        if (cacheAge < 120000) {
+            console.log('Using cached calls data');
+            return session.cachedCalls.data;
+        }
+    }
     const allCalls = [];
     const firstParams = buildParamsWithDate(date, { page: 1, perPage: 100 });
     const firstResponse = await apiGet(workspace, token, 'calls/log', firstParams);
@@ -71,9 +78,12 @@ const fetchAllCalls = async (workspace, token, date) => {
     console.log(`Fetched page 1/${lastPage}: ${firstResponse.payload.data.length} calls`);
     if (lastPage <= 1) {
         console.log(`Total calls fetched: ${allCalls.length} (single page)`);
+        if (session) {
+            session.cachedCalls = { data: allCalls, timestamp: Date.now(), date };
+        }
         return allCalls;
     }
-    const limit = (0, p_limit_1.default)(15);
+    const limit = (0, p_limit_1.default)(20);
     const pagePromises = [];
     for (let page = 2; page <= lastPage; page++) {
         pagePromises.push(limit(async () => {
@@ -95,7 +105,18 @@ const fetchAllCalls = async (workspace, token, date) => {
     const results = await Promise.all(pagePromises);
     results.forEach(pageData => allCalls.push(...pageData));
     console.log(`Total calls fetched: ${allCalls.length} across ${lastPage} pages`);
+    if (session) {
+        session.cachedCalls = { data: allCalls, timestamp: Date.now(), date };
+    }
     return allCalls;
+};
+const isCallConnected = (call) => {
+    const isLive = call.live === 1;
+    const statusName = call.status?.name?.toLowerCase() || '';
+    const vendorStatusName = call.vendor_status?.name?.toLowerCase() || '';
+    return isLive ||
+        statusName.includes('completed') ||
+        vendorStatusName.includes('completed - with conversion');
 };
 const calculateCampaignStats = (calls) => {
     const stats = new Map();
@@ -116,92 +137,103 @@ const calculateCampaignStats = (calls) => {
         const isLive = call.live === 1;
         const isQueued = call.queued === 1;
         const duration = call.duration || 0;
-        const statusName = call.status?.name?.toLowerCase() || '';
         const tfn = call.called_number || 'Unknown';
-        if (isLive && tfn) {
-            if (!campaignStats.tfns.has(tfn)) {
-                campaignStats.tfns.set(tfn, { tfn, liveCount: 0 });
-            }
-            campaignStats.tfns.get(tfn).liveCount++;
+        if (!campaignStats.tfns.has(tfn)) {
+            campaignStats.tfns.set(tfn, { tfn, liveCount: 0, totalDuration: 0, connectedCount: 0, aht: 0 });
         }
-        if (isLive)
+        if (isLive) {
+            campaignStats.tfns.get(tfn).liveCount++;
             campaignStats.live++;
-        if (isQueued)
+        }
+        if (isQueued) {
             campaignStats.incoming++;
-        const isConnected = isLive ||
-            statusName.includes('completed') ||
-            statusName.includes('with conversion');
+        }
+        const isConnected = isCallConnected(call);
         if (isConnected && duration > 0) {
             campaignStats.connected++;
             campaignStats.totalDuration += duration;
+            const tfnStats = campaignStats.tfns.get(tfn);
+            tfnStats.totalDuration += duration;
+            tfnStats.connectedCount++;
         }
     }
     stats.forEach(s => {
         if (s.connected > 0) {
             s.aht = s.totalDuration / s.connected;
         }
+        s.tfns.forEach(tfnStats => {
+            if (tfnStats.connectedCount > 0) {
+                tfnStats.aht = tfnStats.totalDuration / tfnStats.connectedCount;
+            }
+        });
     });
     return stats;
+};
+const formatDuration = (seconds) => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 };
 const formatCampaignStats = (stats, date) => {
     if (stats.size === 0)
         return 'No campaigns currently active.';
-    const lines = [`*Campaign Stats (${date})*\n`];
+    let text = `*Campaign Stats (${date})*\n\n`;
     const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
-    for (const s of sortedStats) {
-        const hours = Math.floor(s.aht / 3600);
-        const minutes = Math.floor((s.aht % 3600) / 60);
-        const seconds = Math.floor(s.aht % 60);
-        const ahtFormatted = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-        let campaignText = `*Campaign => ${s.name}*\n`;
-        if (s.tfns.size > 0) {
-            campaignText += `*TFNs:*\n`;
-            const sortedTFNs = Array.from(s.tfns.values()).sort((a, b) => b.liveCount - a.liveCount);
-            sortedTFNs.forEach(tfn => {
-                campaignText += `  ${tfn.tfn} - ${tfn.liveCount}\n`;
-            });
-        }
-        campaignText += `Live => ${s.live}\n`;
-        campaignText += `Connected => ${s.connected}\n`;
-        campaignText += `AHT => ${ahtFormatted}\n`;
-        lines.push(campaignText);
-    }
-    return lines.join('\n');
+    sortedStats.forEach(s => {
+        text += `*Campaign* => ${s.name}\n`;
+        text += `*TFNs:*\n`;
+        const sortedTfns = Array.from(s.tfns.values()).sort((a, b) => a.tfn.localeCompare(b.tfn));
+        sortedTfns.forEach(tfn => {
+            if (tfn.liveCount > 0) {
+                text += `  ${tfn.tfn} - ${tfn.liveCount}\n`;
+            }
+        });
+        text += `*Live* => ${s.live}\n`;
+        text += `*Connected* => ${s.connected}\n`;
+        text += `*AHT* => ${formatDuration(s.aht)}\n`;
+        text += `\n`;
+    });
+    return text.trim();
+};
+const formatTFNStats = (stats, date) => {
+    if (stats.size === 0)
+        return 'No campaigns currently active.';
+    let text = `*Campaign TFN Stats (${date})*\n\n`;
+    const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
+    sortedStats.forEach(s => {
+        text += `*Campaign* => ${s.name}\n`;
+        text += `*TFNs:*\n`;
+        const sortedTfns = Array.from(s.tfns.values()).sort((a, b) => a.tfn.localeCompare(b.tfn));
+        sortedTfns.forEach(tfn => {
+            if (tfn.connectedCount > 0) {
+                text += `  ${tfn.tfn} - ${tfn.connectedCount} (AHT ${formatDuration(tfn.aht)})\n`;
+            }
+        });
+        text += `*Live* => ${s.live}\n`;
+        text += `*Connected* => ${s.connected}\n`;
+        text += `\n`;
+    });
+    return text.trim();
 };
 const calculateTotalFlow = (stats) => {
     let total = 0;
     stats.forEach(s => {
-        total += s.live + s.incoming;
+        total += s.live;
     });
     return total;
 };
 const getChatId = (ctx) => {
-    return ctx.chat?.id || ctx.from.id;
+    return ctx.chat.id;
 };
-bot.start(async (ctx) => {
+bot.command('start', async (ctx) => {
     const userId = ctx.from.id;
     const session = getOrCreateSession(userId);
-    await ctx.reply(`🤖 *Dialics Campaign Statistics Bot*\n\n` +
-        `This bot displays real-time campaign statistics including:\n` +
-        `• Live calls\n` +
-        `• Incoming/queued calls\n` +
-        `• Connected calls\n` +
-        `• Average handling time (AHT)\n` +
-        `• Active TFNs per campaign\n\n` +
-        `Currently using date: *${session.date}*\n\n` +
-        `You can start using commands immediately!\n` +
-        `Use /stats to view campaign statistics.\n` +
-        `Use /flow to check total flow.\n` +
-        `Use /changedate to filter by a different date.\n` +
-        `Use /help to see all available commands.`, { parse_mode: 'Markdown' });
-});
-bot.command('help', async (ctx) => {
-    const userId = ctx.from.id;
-    const session = getOrCreateSession(userId);
-    await ctx.reply(`*Available Commands*\n\n` +
+    await ctx.reply(`*Welcome to the Campaign Stats Bot!* 🤖\n\n` +
         `*Current Date:* ${session.date}\n\n` +
         `*Statistics:*\n` +
         `/stats [start INTERVAL] — View campaign statistics\n` +
+        `/viewtfns — View TFN-specific statistics with AHT\n` +
         `/flow — Check total flow and alert if below 60\n` +
         `/stopauto — Stop all autoruns\n\n` +
         `*Configuration:*\n` +
@@ -210,6 +242,27 @@ bot.command('help', async (ctx) => {
         `*Examples:*\n` +
         `\`/stats\` — View current campaign stats\n` +
         `\`/stats start 5\` — Auto-check stats every 5 minutes\n` +
+        `\`/viewtfns\` — View TFN statistics with AHT\n` +
+        `\`/flow\` — Check if total flow is below 60\n\n` +
+        `*Note:* By default, the bot uses today's date. Use /changedate to analyze a different date.`, { parse_mode: 'Markdown' });
+});
+bot.command('help', async (ctx) => {
+    const userId = ctx.from.id;
+    const session = getOrCreateSession(userId);
+    await ctx.reply(`*Campaign Stats Bot Help* 📊\n\n` +
+        `*Current Date:* ${session.date}\n\n` +
+        `*Statistics:*\n` +
+        `/stats [start INTERVAL] — View campaign statistics\n` +
+        `/viewtfns — View TFN-specific statistics with AHT\n` +
+        `/flow — Check total flow and alert if below 60\n` +
+        `/stopauto — Stop all autoruns\n\n` +
+        `*Configuration:*\n` +
+        `/changedate — Change the date filter\n` +
+        `/clear — Clear your session data\n\n` +
+        `*Examples:*\n` +
+        `\`/stats\` — View current campaign stats\n` +
+        `\`/stats start 5\` — Auto-check stats every 5 minutes\n` +
+        `\`/viewtfns\` — View TFN statistics with AHT\n` +
         `\`/flow\` — Check if total flow is below 60\n\n` +
         `*Note:* By default, the bot uses today's date. Use /changedate to analyze a different date.`, { parse_mode: 'Markdown' });
 });
@@ -230,13 +283,13 @@ bot.command('stats', async (ctx) => {
                 clearInterval(existingJob.interval);
             }
             await ctx.reply('Fetching statistics...');
-            const calls = await fetchAllCalls(session.workspace, session.token, session.date);
+            const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
             const stats = calculateCampaignStats(calls);
             const text = formatCampaignStats(stats, session.date);
             await ctx.reply(text, { parse_mode: 'Markdown' });
             const job = setInterval(async () => {
                 try {
-                    const calls = await fetchAllCalls(session.workspace, session.token, session.date);
+                    const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
                     const stats = calculateCampaignStats(calls);
                     const text = formatCampaignStats(stats, session.date);
                     await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
@@ -250,7 +303,7 @@ bot.command('stats', async (ctx) => {
         }
         else {
             await ctx.reply('Fetching statistics...');
-            const calls = await fetchAllCalls(session.workspace, session.token, session.date);
+            const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
             const stats = calculateCampaignStats(calls);
             const text = formatCampaignStats(stats, session.date);
             await ctx.reply(text, { parse_mode: 'Markdown' });
@@ -258,6 +311,27 @@ bot.command('stats', async (ctx) => {
     }
     catch (error) {
         await ctx.reply(`Error fetching stats: ${error.message}`);
+    }
+    finally {
+        session.processing = false;
+    }
+});
+bot.command('viewtfns', async (ctx) => {
+    const userId = ctx.from.id;
+    const session = getOrCreateSession(userId);
+    if (session.processing) {
+        return ctx.reply('⏳ Please wait, your previous request is still processing...');
+    }
+    session.processing = true;
+    try {
+        await ctx.reply('Fetching TFN statistics...');
+        const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+        const stats = calculateCampaignStats(calls);
+        const text = formatTFNStats(stats, session.date);
+        await ctx.reply(text, { parse_mode: 'Markdown' });
+    }
+    catch (error) {
+        await ctx.reply(`Error fetching TFN stats: ${error.message}`);
     }
     finally {
         session.processing = false;
@@ -272,7 +346,7 @@ bot.command('flow', async (ctx) => {
     session.processing = true;
     try {
         await ctx.reply('Checking flow...');
-        const calls = await fetchAllCalls(session.workspace, session.token, session.date);
+        const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
         const stats = calculateCampaignStats(calls);
         const totalFlow = calculateTotalFlow(stats);
         let text = `*Flow Check (${session.date})*\n\n`;
@@ -345,9 +419,11 @@ bot.on('text', async (ctx) => {
                 return ctx.reply('Invalid date format. Please use YYYY-MM-DD format.\nExample: 2025-11-26');
             }
             session.date = text;
+            session.cachedCalls = undefined;
             await ctx.reply(`Date filter updated to: *${text}*\n\n` +
                 `Available commands:\n` +
                 `• /stats [start INTERVAL] - Campaign statistics\n` +
+                `• /viewtfns - View TFN statistics with AHT\n` +
                 `• /flow - Check total flow\n` +
                 `• /changedate - Change date filter\n` +
                 `• /stopauto - Stop all autoruns\n` +
