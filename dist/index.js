@@ -135,7 +135,9 @@ const isCallConnected = (call) => {
     const duration = call.duration || 0;
     const statusName = call.status?.name?.toLowerCase() || '';
     const vendorStatusName = call.vendor_status?.name?.toLowerCase() || '';
-    return duration > 0 && (!statusName.includes('not connected') || vendorStatusName.includes('completed'));
+    const hasCompletedStatus = statusName.includes('completed') || vendorStatusName.includes('completed');
+    const hasDurationAndNotFailed = duration > 0 && !statusName.includes('not connected');
+    return hasCompletedStatus || hasDurationAndNotFailed;
 };
 const calculateCampaignStats = (calls) => {
     const stats = new Map();
@@ -209,7 +211,7 @@ const formatCampaignStats = (stats, date) => {
         text += `∙ Connected: ${s.connected}\n`;
         text += `∙ Connected AHT: ${formatDuration(s.aht)}\n`;
         if (index < sortedStats.length - 1) {
-            text += `\n----------------------------------                                    \n\n`;
+            text += `\n--------------------------------                                      \n\n`;
         }
     });
     return text.trim();
@@ -227,21 +229,22 @@ const formatTFNStats = (stats, date) => {
             .sort((a, b) => b.connectedCount - a.connectedCount);
         if (sortedTfns.length > 0) {
             text += `∙ TFNs:\n`;
+            text += '```\n';
             const maxCountLength = Math.max(...sortedTfns.map(tfn => tfn.connectedCount.toString().length));
             sortedTfns.forEach(tfn => {
                 const countStr = tfn.connectedCount.toString();
                 const paddedCount = countStr.padStart(maxCountLength, ' ');
                 const spacesNeeded = 7 - countStr.length;
                 const spacing = ' '.repeat(spacesNeeded);
-                text += `  - ${tfn.tfn}: ${paddedCount}${spacing}(AHT: ${formatDuration(tfn.aht)})\n`;
+                text += `  ${tfn.tfn}: ${paddedCount}${spacing}(AHT: ${formatDuration(tfn.aht)})\n`;
             });
-            text += `\n`;
+            text += '```\n';
         }
         text += `∙ Live: ${s.live}\n`;
         text += `∙ Connected: ${s.connected}\n`;
         text += `∙ Connected AHT: ${formatDuration(s.aht)}\n`;
         if (index < sortedStats.length - 1) {
-            text += `\n----------------------------------                                    \n\n`;
+            text += `\n--------------------------------                                      \n\n`;
         }
     });
     return text.trim();
@@ -284,7 +287,7 @@ const formatRepeatCallers = (callerCounts, date) => {
             const remainingCampaigns = sortedCampaigns.slice(campaignIndex + 1);
             const hasMoreWithData = remainingCampaigns.some(([_, callers]) => Array.from(callers.values()).some(count => count > 3));
             if (hasMoreWithData) {
-                text += `\n----------------------------------                                    \n\n`;
+                text += `\n--------------------------------                                      \n\n`;
             }
         }
     });
@@ -410,13 +413,13 @@ bot.command('viewtfns', async (ctx) => {
             const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
             const stats = calculateCampaignStats(calls);
             const text = formatTFNStats(stats, session.date);
-            await ctx.reply(text, { parse_mode: 'Markdown' });
+            await ctx.reply(text);
             const job = setInterval(async () => {
                 try {
                     const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
                     const stats = calculateCampaignStats(calls);
                     const text = formatTFNStats(stats, session.date);
-                    await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+                    await ctx.telegram.sendMessage(chatId, text);
                 }
                 catch (error) {
                     console.error('Autorun viewtfns error:', error);
@@ -430,7 +433,7 @@ bot.command('viewtfns', async (ctx) => {
             const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
             const stats = calculateCampaignStats(calls);
             const text = formatTFNStats(stats, session.date);
-            await ctx.reply(text, { parse_mode: 'Markdown' });
+            await ctx.reply(text);
         }
     }
     catch (error) {

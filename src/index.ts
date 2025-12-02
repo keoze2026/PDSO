@@ -220,8 +220,14 @@ const isCallConnected = (call: CallData): boolean => {
   const statusName = call.status?.name?.toLowerCase() || '';
   const vendorStatusName = call.vendor_status?.name?.toLowerCase() || '';
   
-  // Connected if: duration > 0 AND (status is NOT "Call Not Connected" OR vendor_status contains "completed")
-  return duration > 0 && (!statusName.includes('not connected') || vendorStatusName.includes('completed'));
+  // A call is connected if:
+  // 1. Status contains "completed" (regardless of duration), OR
+  // 2. Vendor status contains "completed", OR
+  // 3. Duration > 0 AND status is NOT "call not connected"
+  const hasCompletedStatus = statusName.includes('completed') || vendorStatusName.includes('completed');
+  const hasDurationAndNotFailed = duration > 0 && !statusName.includes('not connected');
+  
+  return hasCompletedStatus || hasDurationAndNotFailed;
 };
 
 const calculateCampaignStats = (calls: CallData[]): Map<string, CampaignStats> => {
@@ -322,7 +328,7 @@ const formatCampaignStats = (stats: Map<string, CampaignStats>, date: string): s
     
     // Add separator line if not the last campaign
     if (index < sortedStats.length - 1) {
-      text += `\n----------------------------------                                    \n\n`;
+      text += `\n--------------------------------                                      \n\n`;
     }
   });
   
@@ -348,6 +354,9 @@ const formatTFNStats = (stats: Map<string, CampaignStats>, date: string): string
     if (sortedTfns.length > 0) {
       text += `∙ TFNs:\n`;
       
+      // Use monospace code block for proper alignment
+      text += '```\n';
+      
       // Find the maximum count length to determine the alignment position
       const maxCountLength = Math.max(...sortedTfns.map(tfn => tfn.connectedCount.toString().length));
       
@@ -360,9 +369,10 @@ const formatTFNStats = (stats: Map<string, CampaignStats>, date: string): string
         const spacesNeeded = 7 - countStr.length;
         const spacing = ' '.repeat(spacesNeeded);
         
-        text += `  - ${tfn.tfn}: ${paddedCount}${spacing}(AHT: ${formatDuration(tfn.aht)})\n`;
+        text += `  ${tfn.tfn}: ${paddedCount}${spacing}(AHT: ${formatDuration(tfn.aht)})\n`;
       });
-      text += `\n`;
+      
+      text += '```\n';
     }
     
     text += `∙ Live: ${s.live}\n`;
@@ -371,7 +381,7 @@ const formatTFNStats = (stats: Map<string, CampaignStats>, date: string): string
     
     // Add separator line if not the last campaign
     if (index < sortedStats.length - 1) {
-      text += `\n----------------------------------                                    \n\n`;
+      text += `\n--------------------------------                                      \n\n`;
     }
   });
   
@@ -433,7 +443,7 @@ const formatRepeatCallers = (callerCounts: Map<string, Map<string, number>>, dat
       );
       
       if (hasMoreWithData) {
-        text += `\n----------------------------------                                    \n\n`;
+        text += `\n--------------------------------                                      \n\n`;
       }
     }
   });
@@ -591,7 +601,7 @@ bot.command('viewtfns', async (ctx) => {
       const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
       const stats = calculateCampaignStats(calls);
       const text = formatTFNStats(stats, session.date);
-      await ctx.reply(text, { parse_mode: 'Markdown' });
+      await ctx.reply(text);
       
       // Schedule repeating job with correct chat ID (without cache for fresh data)
       const job = setInterval(async () => {
@@ -599,7 +609,7 @@ bot.command('viewtfns', async (ctx) => {
           const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
           const stats = calculateCampaignStats(calls);
           const text = formatTFNStats(stats, session.date);
-          await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+          await ctx.telegram.sendMessage(chatId, text);
         } catch (error: any) {
           console.error('Autorun viewtfns error:', error);
         }
@@ -613,7 +623,7 @@ bot.command('viewtfns', async (ctx) => {
       const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
       const stats = calculateCampaignStats(calls);
       const text = formatTFNStats(stats, session.date);
-      await ctx.reply(text, { parse_mode: 'Markdown' });
+      await ctx.reply(text);
     }
   } catch (error: any) {
     await ctx.reply(`Error fetching TFN stats: ${error.message}`);
