@@ -6,7 +6,7 @@ import pLimit from 'p-limit';
 
 // Configuration
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8067862927:AAF15wt-h8YGfXhtdN0kOXu3MQf-zGX0gWU';
-const WEBHOOK_URL = process.env.WEBHOOK_URL || '';
+const WEBHOOK_URL = process.env.WEBHOOK_URL || 'https://tgbot-nyyq.onrender.com';
 const PORT = parseInt(process.env.PORT || '8080');
 const BASE_API = 'https://api-gateway.dialics.com/api/v1';
 
@@ -35,6 +35,9 @@ interface CallData {
 interface TFNStats {
   tfn: string;
   liveCount: number;
+  totalDuration: number;
+  connectedCount: number;
+  aht: number;
 }
 
 interface CampaignStats {
@@ -194,7 +197,7 @@ const calculateCampaignStats = (calls: CallData[]): Map<string, CampaignStats> =
     // Track TFN live calls
     if (isLive && tfn) {
       if (!campaignStats.tfns.has(tfn)) {
-        campaignStats.tfns.set(tfn, { tfn, liveCount: 0 });
+        campaignStats.tfns.set(tfn, { tfn, liveCount: 0, totalDuration: 0, connectedCount: 0, aht: 0 });
       }
       campaignStats.tfns.get(tfn)!.liveCount++;
     }
@@ -210,14 +213,31 @@ const calculateCampaignStats = (calls: CallData[]): Map<string, CampaignStats> =
     if (isConnected && duration > 0) {
       campaignStats.connected++;
       campaignStats.totalDuration += duration;
+      
+      // Track TFN duration and connected count for AHT calculation
+      if (tfn) {
+        if (!campaignStats.tfns.has(tfn)) {
+          campaignStats.tfns.set(tfn, { tfn, liveCount: 0, totalDuration: 0, connectedCount: 0, aht: 0 });
+        }
+        const tfnStats = campaignStats.tfns.get(tfn)!;
+        tfnStats.totalDuration += duration;
+        tfnStats.connectedCount++;
+      }
     }
   }
   
-  // Calculate AHT
+  // Calculate AHT for campaigns and TFNs
   stats.forEach(s => {
     if (s.connected > 0) {
       s.aht = s.totalDuration / s.connected;
     }
+    
+    // Calculate AHT for each TFN
+    s.tfns.forEach(tfnStats => {
+      if (tfnStats.connectedCount > 0) {
+        tfnStats.aht = tfnStats.totalDuration / tfnStats.connectedCount;
+      }
+    });
   });
   
   return stats;
@@ -229,20 +249,25 @@ const formatCampaignStats = (stats: Map<string, CampaignStats>, date: string): s
   const lines: string[] = [`*Campaign Stats (${date})*\n`];
   const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
   
+  const formatTime = (seconds: number): string => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+  
   for (const s of sortedStats) {
-    const hours = Math.floor(s.aht / 3600);
-    const minutes = Math.floor((s.aht % 3600) / 60);
-    const seconds = Math.floor(s.aht % 60);
-    const ahtFormatted = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    const ahtFormatted = formatTime(s.aht);
     
     let campaignText = `*Campaign => ${s.name}*\n`;
     
-    // Add TFNs section
+    // Add TFNs section with AHT
     if (s.tfns.size > 0) {
       campaignText += `*TFNs:*\n`;
       const sortedTFNs = Array.from(s.tfns.values()).sort((a, b) => b.liveCount - a.liveCount);
       sortedTFNs.forEach(tfn => {
-        campaignText += `  ${tfn.tfn} - ${tfn.liveCount}\n`;
+        const tfnAhtFormatted = formatTime(tfn.aht);
+        campaignText += `  ${tfn.tfn} - ${tfn.liveCount} (AHT-${tfnAhtFormatted})\n`;
       });
     }
     
