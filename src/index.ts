@@ -291,16 +291,6 @@ const formatCampaignStats = (stats: Map<string, CampaignStats>, date: string): s
   
   sortedStats.forEach(s => {
     text += `*Campaign* => ${s.name}\n`;
-    text += `*TFNs:*\n`;
-    
-    // Sort TFNs for consistent display
-    const sortedTfns = Array.from(s.tfns.values()).sort((a, b) => a.tfn.localeCompare(b.tfn));
-    sortedTfns.forEach(tfn => {
-      if (tfn.liveCount > 0) {
-        text += `  ${tfn.tfn} - ${tfn.liveCount}\n`;
-      }
-    });
-    
     text += `*Live* => ${s.live}\n`;
     text += `*Connected* => ${s.connected}\n`;
     text += `*AHT* => ${formatDuration(s.aht)}\n`;
@@ -381,7 +371,7 @@ bot.command('help', async (ctx) => {
   const session = getOrCreateSession(userId);
   
   await ctx.reply(
-    `*Campaign Stats Bot Help* \n\n` +
+    `*Campaign Stats Bot Help* 📊\n\n` +
     `*Current Date:* ${session.date}\n\n` +
     `*Statistics:*\n` +
     `/stats [start INTERVAL] — View campaign statistics\n` +
@@ -407,7 +397,7 @@ bot.command('stats', async (ctx) => {
   const session = getOrCreateSession(userId);
   
   if (session.processing) {
-    return ctx.reply('Please wait, your previous request is still processing...');
+    return ctx.reply('⏳ Please wait, your previous request is still processing...');
   }
   
   session.processing = true;
@@ -444,7 +434,7 @@ bot.command('stats', async (ctx) => {
       }, interval * 60 * 1000);
       
       session.autorunJobs.set('stats', { interval: job, chatId });
-      await ctx.reply(`Statistics autorun started (every ${interval} minutes) for date: ${session.date}`);
+      await ctx.reply(`✅ Statistics autorun started (every ${interval} minutes) for date: ${session.date}`);
     } else {
       // One-time stats (with cache disabled)
       await ctx.reply('Fetching statistics...');
@@ -465,7 +455,7 @@ bot.command('viewtfns', async (ctx) => {
   const session = getOrCreateSession(userId);
   
   if (session.processing) {
-    return ctx.reply('Please wait, your previous request is still processing...');
+    return ctx.reply('⏳ Please wait, your previous request is still processing...');
   }
   
   session.processing = true;
@@ -488,7 +478,7 @@ bot.command('flow', async (ctx) => {
   const session = getOrCreateSession(userId);
   
   if (session.processing) {
-    return ctx.reply('Please wait, your previous request is still processing...');
+    return ctx.reply('⏳ Please wait, your previous request is still processing...');
   }
   
   session.processing = true;
