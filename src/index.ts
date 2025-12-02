@@ -6,7 +6,7 @@ import pLimit from 'p-limit';
 
 // Configuration
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8067862927:AAF15wt-h8YGfXhtdN0kOXu3MQf-zGX0gWU';
-const WEBHOOK_URL = process.env.WEBHOOK_URL || 'https://tgbot-nyyq.onrender.com';
+const WEBHOOK_URL = process.env.WEBHOOK_URL || '';
 const PORT = parseInt(process.env.PORT || '8080');
 const BASE_API = 'https://api-gateway.dialics.com/api/v1';
 
