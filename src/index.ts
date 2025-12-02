@@ -276,28 +276,34 @@ const calculateCampaignStats = (calls: CallData[]): Map<string, CampaignStats> =
 };
 
 const formatDuration = (seconds: number): string => {
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
+  const minutes = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
-  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+};
+
+const extractCampaignNumber = (campaignName: string): string => {
+  // Extract number from campaign name (e.g., "Camp 01" -> "01", "Campaign 123" -> "123")
+  const match = campaignName.match(/(\d+)/);
+  return match ? match[1] : campaignName;
 };
 
 const formatCampaignStats = (stats: Map<string, CampaignStats>, date: string): string => {
   if (stats.size === 0) return 'No campaigns currently active.';
   
-  let text = `*Campaign Stats (${date})*\n\n`;
+  let text = `Campaign Stats (${date})\n\n`;
   
   const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
   
   sortedStats.forEach((s, index) => {
-    text += `*Campaign* => ${s.name}\n`;
-    text += `*Live* => ${s.live}\n`;
-    text += `*Connected* => ${s.connected}\n`;
-    text += `*AHT* => ${formatDuration(s.aht)}\n`;
+    const campaignNumber = extractCampaignNumber(s.name);
+    text += `Campaign: ${campaignNumber}\n\n`;
+    text += `● Live: ${s.live}\n`;
+    text += `● Connected: ${s.connected}\n`;
+    text += `● Connected AHT: ${formatDuration(s.aht)}\n`;
     
     // Add separator line if not the last campaign
     if (index < sortedStats.length - 1) {
-      text += `\n-------------------\n\n`;
+      text += `\n-----------------------------------------------------------------------------\n\n`;
     }
   });
   
@@ -307,29 +313,41 @@ const formatCampaignStats = (stats: Map<string, CampaignStats>, date: string): s
 const formatTFNStats = (stats: Map<string, CampaignStats>, date: string): string => {
   if (stats.size === 0) return 'No campaigns currently active.';
   
-  let text = `*Campaign TFN Stats (${date})*\n\n`;
+  let text = `Campaign TFN Stats (${date})\n\n`;
   
   const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
   
   sortedStats.forEach((s, index) => {
-    text += `*Campaign* => ${s.name}\n`;
-    text += `*TFNs:*\n`;
+    const campaignNumber = extractCampaignNumber(s.name);
+    text += `Campaign: ${campaignNumber}\n\n`;
     
     // Sort TFNs for consistent display
-    const sortedTfns = Array.from(s.tfns.values()).sort((a, b) => a.tfn.localeCompare(b.tfn));
-    sortedTfns.forEach(tfn => {
-      // Only show TFNs with connected calls
-      if (tfn.connectedCount > 0) {
-        text += `  ${tfn.tfn} - ${tfn.connectedCount} (AHT ${formatDuration(tfn.aht)})\n`;
-      }
-    });
+    const sortedTfns = Array.from(s.tfns.values())
+      .filter(tfn => tfn.connectedCount > 0)
+      .sort((a, b) => a.tfn.localeCompare(b.tfn));
     
-    text += `*Live* => ${s.live}\n`;
-    text += `*Connected* => ${s.connected}\n`;
+    if (sortedTfns.length > 0) {
+      text += `● TFNs:\n`;
+      
+      // Find max length for alignment
+      const maxTfnLength = Math.max(...sortedTfns.map(tfn => tfn.tfn.length));
+      const maxCountLength = Math.max(...sortedTfns.map(tfn => tfn.connectedCount.toString().length));
+      
+      sortedTfns.forEach(tfn => {
+        const tfnPadded = tfn.tfn.padEnd(maxTfnLength);
+        const countPadded = tfn.connectedCount.toString().padEnd(maxCountLength);
+        text += `  - ${tfnPadded}: ${countPadded}    (AHT: ${formatDuration(tfn.aht)})\n`;
+      });
+      text += `\n`;
+    }
+    
+    text += `● Live: ${s.live}\n`;
+    text += `● Connected: ${s.connected}\n`;
+    text += `● Connected AHT: ${formatDuration(s.aht)}\n`;
     
     // Add separator line if not the last campaign
     if (index < sortedStats.length - 1) {
-      text += `\n-------------------\n\n`;
+      text += `\n-----------------------------------------------------------------------------\n\n`;
     }
   });
   
