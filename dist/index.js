@@ -249,7 +249,7 @@ bot.command('start', async (ctx) => {
 bot.command('help', async (ctx) => {
     const userId = ctx.from.id;
     const session = getOrCreateSession(userId);
-    await ctx.reply(`*Campaign Stats Bot Help* 📊\n\n` +
+    await ctx.reply(`*Campaign Stats Bot Help* \n\n` +
         `*Current Date:* ${session.date}\n\n` +
         `*Statistics:*\n` +
         `/stats [start INTERVAL] — View campaign statistics\n` +
@@ -271,7 +271,7 @@ bot.command('stats', async (ctx) => {
     const chatId = getChatId(ctx);
     const session = getOrCreateSession(userId);
     if (session.processing) {
-        return ctx.reply('⏳ Please wait, your previous request is still processing...');
+        return ctx.reply('Please wait, your previous request is still processing...');
     }
     session.processing = true;
     try {
@@ -299,7 +299,7 @@ bot.command('stats', async (ctx) => {
                 }
             }, interval * 60 * 1000);
             session.autorunJobs.set('stats', { interval: job, chatId });
-            await ctx.reply(`✅ Statistics autorun started (every ${interval} minutes) for date: ${session.date}`);
+            await ctx.reply(`Statistics autorun started (every ${interval} minutes) for date: ${session.date}`);
         }
         else {
             await ctx.reply('Fetching statistics...');
@@ -320,7 +320,7 @@ bot.command('viewtfns', async (ctx) => {
     const userId = ctx.from.id;
     const session = getOrCreateSession(userId);
     if (session.processing) {
-        return ctx.reply('⏳ Please wait, your previous request is still processing...');
+        return ctx.reply('Please wait, your previous request is still processing...');
     }
     session.processing = true;
     try {
@@ -341,7 +341,7 @@ bot.command('flow', async (ctx) => {
     const userId = ctx.from.id;
     const session = getOrCreateSession(userId);
     if (session.processing) {
-        return ctx.reply('⏳ Please wait, your previous request is still processing...');
+        return ctx.reply('Please wait, your previous request is still processing...');
     }
     session.processing = true;
     try {
