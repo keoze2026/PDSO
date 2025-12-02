@@ -192,17 +192,11 @@ const fetchAllCalls = async (workspace: string, token: string, date: string, use
 };
 
 const isCallConnected = (call: CallData): boolean => {
-  const isLive = call.live === 1;
+  const duration = call.duration || 0;
   const statusName = call.status?.name?.toLowerCase() || '';
-  const vendorStatusName = call.vendor_status?.name?.toLowerCase() || '';
   
-  // Connected if:
-  // 1. Currently live, OR
-  // 2. Status contains "completed" with or without conversion, OR
-  // 3. Vendor status contains "completed - with conversion"
-  return isLive || 
-         statusName.includes('completed') || 
-         vendorStatusName.includes('completed - with conversion');
+  // Connected if: duration > 0 AND status is NOT "Call Not Connected"
+  return duration > 0 && !statusName.includes('not connected');
 };
 
 const calculateCampaignStats = (calls: CallData[]): Map<string, CampaignStats> => {
@@ -297,9 +291,9 @@ const formatCampaignStats = (stats: Map<string, CampaignStats>, date: string): s
   sortedStats.forEach((s, index) => {
     const campaignNumber = extractCampaignNumber(s.name);
     text += `Campaign: ${campaignNumber}\n\n`;
-    text += `● Live: ${s.live}\n`;
-    text += `● Connected: ${s.connected}\n`;
-    text += `● Connected AHT: ${formatDuration(s.aht)}\n`;
+    text += `∙ Live: ${s.live}\n`;
+    text += `∙ Connected: ${s.connected}\n`;
+    text += `∙ Connected AHT: ${formatDuration(s.aht)}\n`;
     
     // Add separator line if not the last campaign
     if (index < sortedStats.length - 1) {
@@ -327,23 +321,28 @@ const formatTFNStats = (stats: Map<string, CampaignStats>, date: string): string
       .sort((a, b) => a.tfn.localeCompare(b.tfn));
     
     if (sortedTfns.length > 0) {
-      text += `● TFNs:\n`;
+      text += `∙ TFNs:\n`;
       
-      // Find max length for alignment
-      const maxTfnLength = Math.max(...sortedTfns.map(tfn => tfn.tfn.length));
+      // Find the maximum count length to determine the alignment position
       const maxCountLength = Math.max(...sortedTfns.map(tfn => tfn.connectedCount.toString().length));
       
       sortedTfns.forEach(tfn => {
-        const tfnPadded = tfn.tfn.padEnd(maxTfnLength);
-        const countPadded = tfn.connectedCount.toString().padEnd(maxCountLength);
-        text += `  - ${tfnPadded}: ${countPadded}    (AHT: ${formatDuration(tfn.aht)})\n`;
+        const countStr = tfn.connectedCount.toString();
+        // Pad the count to align properly
+        const paddedCount = countStr.padStart(maxCountLength, ' ');
+        
+        // Calculate spaces after count: base 7 spaces minus the number of digits
+        const spacesNeeded = 7 - countStr.length;
+        const spacing = ' '.repeat(spacesNeeded);
+        
+        text += `  - ${tfn.tfn}: ${paddedCount}${spacing}(AHT: ${formatDuration(tfn.aht)})\n`;
       });
       text += `\n`;
     }
     
-    text += `● Live: ${s.live}\n`;
-    text += `● Connected: ${s.connected}\n`;
-    text += `● Connected AHT: ${formatDuration(s.aht)}\n`;
+    text += `∙ Live: ${s.live}\n`;
+    text += `∙ Connected: ${s.connected}\n`;
+    text += `∙ Connected AHT: ${formatDuration(s.aht)}\n`;
     
     // Add separator line if not the last campaign
     if (index < sortedStats.length - 1) {

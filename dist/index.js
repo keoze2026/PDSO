@@ -111,12 +111,9 @@ const fetchAllCalls = async (workspace, token, date, useCache = false, session) 
     return allCalls;
 };
 const isCallConnected = (call) => {
-    const isLive = call.live === 1;
+    const duration = call.duration || 0;
     const statusName = call.status?.name?.toLowerCase() || '';
-    const vendorStatusName = call.vendor_status?.name?.toLowerCase() || '';
-    return isLive ||
-        statusName.includes('completed') ||
-        vendorStatusName.includes('completed - with conversion');
+    return duration > 0 && !statusName.includes('not connected');
 };
 const calculateCampaignStats = (calls) => {
     const stats = new Map();
@@ -186,9 +183,9 @@ const formatCampaignStats = (stats, date) => {
     sortedStats.forEach((s, index) => {
         const campaignNumber = extractCampaignNumber(s.name);
         text += `Campaign: ${campaignNumber}\n\n`;
-        text += `● Live: ${s.live}\n`;
-        text += `● Connected: ${s.connected}\n`;
-        text += `● Connected AHT: ${formatDuration(s.aht)}\n`;
+        text += `∙ Live: ${s.live}\n`;
+        text += `∙ Connected: ${s.connected}\n`;
+        text += `∙ Connected AHT: ${formatDuration(s.aht)}\n`;
         if (index < sortedStats.length - 1) {
             text += `\n-----------------------------------------------------------------------------\n\n`;
         }
@@ -207,19 +204,20 @@ const formatTFNStats = (stats, date) => {
             .filter(tfn => tfn.connectedCount > 0)
             .sort((a, b) => a.tfn.localeCompare(b.tfn));
         if (sortedTfns.length > 0) {
-            text += `● TFNs:\n`;
-            const maxTfnLength = Math.max(...sortedTfns.map(tfn => tfn.tfn.length));
+            text += `∙ TFNs:\n`;
             const maxCountLength = Math.max(...sortedTfns.map(tfn => tfn.connectedCount.toString().length));
             sortedTfns.forEach(tfn => {
-                const tfnPadded = tfn.tfn.padEnd(maxTfnLength);
-                const countPadded = tfn.connectedCount.toString().padEnd(maxCountLength);
-                text += `  - ${tfnPadded}: ${countPadded}    (AHT: ${formatDuration(tfn.aht)})\n`;
+                const countStr = tfn.connectedCount.toString();
+                const paddedCount = countStr.padStart(maxCountLength, ' ');
+                const spacesNeeded = 7 - countStr.length;
+                const spacing = ' '.repeat(spacesNeeded);
+                text += `  - ${tfn.tfn}: ${paddedCount}${spacing}(AHT: ${formatDuration(tfn.aht)})\n`;
             });
             text += `\n`;
         }
-        text += `● Live: ${s.live}\n`;
-        text += `● Connected: ${s.connected}\n`;
-        text += `● Connected AHT: ${formatDuration(s.aht)}\n`;
+        text += `∙ Live: ${s.live}\n`;
+        text += `∙ Connected: ${s.connected}\n`;
+        text += `∙ Connected AHT: ${formatDuration(s.aht)}\n`;
         if (index < sortedStats.length - 1) {
             text += `\n-----------------------------------------------------------------------------\n\n`;
         }
