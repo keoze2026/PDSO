@@ -83,7 +83,7 @@ const fetchAllCalls = async (workspace, token, date, useCache = false, session) 
         }
         return allCalls;
     }
-    const limit = (0, p_limit_1.default)(20);
+    const limit = (0, p_limit_1.default)(25);
     const pagePromises = [];
     for (let page = 2; page <= lastPage; page++) {
         pagePromises.push(limit(async () => {
@@ -180,12 +180,14 @@ const formatCampaignStats = (stats, date) => {
         return 'No campaigns currently active.';
     let text = `*Campaign Stats (${date})*\n\n`;
     const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
-    sortedStats.forEach(s => {
+    sortedStats.forEach((s, index) => {
         text += `*Campaign* => ${s.name}\n`;
         text += `*Live* => ${s.live}\n`;
         text += `*Connected* => ${s.connected}\n`;
         text += `*AHT* => ${formatDuration(s.aht)}\n`;
-        text += `\n`;
+        if (index < sortedStats.length - 1) {
+            text += `\n-------------------\n\n`;
+        }
     });
     return text.trim();
 };
@@ -194,7 +196,7 @@ const formatTFNStats = (stats, date) => {
         return 'No campaigns currently active.';
     let text = `*Campaign TFN Stats (${date})*\n\n`;
     const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
-    sortedStats.forEach(s => {
+    sortedStats.forEach((s, index) => {
         text += `*Campaign* => ${s.name}\n`;
         text += `*TFNs:*\n`;
         const sortedTfns = Array.from(s.tfns.values()).sort((a, b) => a.tfn.localeCompare(b.tfn));
@@ -205,7 +207,9 @@ const formatTFNStats = (stats, date) => {
         });
         text += `*Live* => ${s.live}\n`;
         text += `*Connected* => ${s.connected}\n`;
-        text += `\n`;
+        if (index < sortedStats.length - 1) {
+            text += `\n-------------------\n\n`;
+        }
     });
     return text.trim();
 };
@@ -222,12 +226,12 @@ const getChatId = (ctx) => {
 bot.command('start', async (ctx) => {
     const userId = ctx.from.id;
     const session = getOrCreateSession(userId);
-    await ctx.reply(`*Welcome to the Campaign Stats Bot!* 🤖\n\n` +
+    await ctx.reply(`*Welcome to the Campaign Stats Bot!*\n\n` +
         `*Current Date:* ${session.date}\n\n` +
         `*Statistics:*\n` +
         `/stats [start INTERVAL] — View campaign statistics\n` +
-        `/viewtfns — View TFN-specific statistics with AHT\n` +
-        `/flow — Check total flow and alert if below 60\n` +
+        `/viewtfns [start INTERVAL] — View TFN-specific statistics with AHT\n` +
+        `/flow [start INTERVAL] — Check total flow and alert if below 60\n` +
         `/stopauto — Stop all autoruns\n\n` +
         `*Configuration:*\n` +
         `/changedate — Change the date filter\n` +
@@ -235,19 +239,19 @@ bot.command('start', async (ctx) => {
         `*Examples:*\n` +
         `\`/stats\` — View current campaign stats\n` +
         `\`/stats start 5\` — Auto-check stats every 5 minutes\n` +
-        `\`/viewtfns\` — View TFN statistics with AHT\n` +
-        `\`/flow\` — Check if total flow is below 60\n\n` +
+        `\`/viewtfns start 10\` — Auto-check TFN stats every 10 minutes\n` +
+        `\`/flow start 3\` — Auto-check flow every 3 minutes\n\n` +
         `*Note:* By default, the bot uses today's date. Use /changedate to analyze a different date.`, { parse_mode: 'Markdown' });
 });
 bot.command('help', async (ctx) => {
     const userId = ctx.from.id;
     const session = getOrCreateSession(userId);
-    await ctx.reply(`*Campaign Stats Bot Help* 📊\n\n` +
+    await ctx.reply(`*Campaign Stats Bot Help*\n\n` +
         `*Current Date:* ${session.date}\n\n` +
         `*Statistics:*\n` +
         `/stats [start INTERVAL] — View campaign statistics\n` +
-        `/viewtfns — View TFN-specific statistics with AHT\n` +
-        `/flow — Check total flow and alert if below 60\n` +
+        `/viewtfns [start INTERVAL] — View TFN-specific statistics with AHT\n` +
+        `/flow [start INTERVAL] — Check total flow and alert if below 60\n` +
         `/stopauto — Stop all autoruns\n\n` +
         `*Configuration:*\n` +
         `/changedate — Change the date filter\n` +
@@ -255,8 +259,8 @@ bot.command('help', async (ctx) => {
         `*Examples:*\n` +
         `\`/stats\` — View current campaign stats\n` +
         `\`/stats start 5\` — Auto-check stats every 5 minutes\n` +
-        `\`/viewtfns\` — View TFN statistics with AHT\n` +
-        `\`/flow\` — Check if total flow is below 60\n\n` +
+        `\`/viewtfns start 10\` — Auto-check TFN stats every 10 minutes\n` +
+        `\`/flow start 3\` — Auto-check flow every 3 minutes\n\n` +
         `*Note:* By default, the bot uses today's date. Use /changedate to analyze a different date.`, { parse_mode: 'Markdown' });
 });
 bot.command('stats', async (ctx) => {
@@ -264,7 +268,7 @@ bot.command('stats', async (ctx) => {
     const chatId = getChatId(ctx);
     const session = getOrCreateSession(userId);
     if (session.processing) {
-        return ctx.reply('⏳ Please wait, your previous request is still processing...');
+        return ctx.reply('Please wait, your previous request is still processing...');
     }
     session.processing = true;
     try {
@@ -276,7 +280,7 @@ bot.command('stats', async (ctx) => {
                 clearInterval(existingJob.interval);
             }
             await ctx.reply('Fetching statistics...');
-            const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
+            const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
             const stats = calculateCampaignStats(calls);
             const text = formatCampaignStats(stats, session.date);
             await ctx.reply(text, { parse_mode: 'Markdown' });
@@ -292,11 +296,11 @@ bot.command('stats', async (ctx) => {
                 }
             }, interval * 60 * 1000);
             session.autorunJobs.set('stats', { interval: job, chatId });
-            await ctx.reply(`✅ Statistics autorun started (every ${interval} minutes) for date: ${session.date}`);
+            await ctx.reply(`Statistics autorun started (every ${interval} minutes) for date: ${session.date}`);
         }
         else {
             await ctx.reply('Fetching statistics...');
-            const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
+            const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
             const stats = calculateCampaignStats(calls);
             const text = formatCampaignStats(stats, session.date);
             await ctx.reply(text, { parse_mode: 'Markdown' });
@@ -311,17 +315,46 @@ bot.command('stats', async (ctx) => {
 });
 bot.command('viewtfns', async (ctx) => {
     const userId = ctx.from.id;
+    const chatId = getChatId(ctx);
     const session = getOrCreateSession(userId);
     if (session.processing) {
-        return ctx.reply('⏳ Please wait, your previous request is still processing...');
+        return ctx.reply('Please wait, your previous request is still processing...');
     }
     session.processing = true;
     try {
-        await ctx.reply('Fetching TFN statistics...');
-        const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
-        const stats = calculateCampaignStats(calls);
-        const text = formatTFNStats(stats, session.date);
-        await ctx.reply(text, { parse_mode: 'Markdown' });
+        const args = ctx.message.text.split(' ').slice(1);
+        if (args[0] === 'start') {
+            const interval = Math.max(parseInt(args[1]) || 5, 1);
+            const existingJob = session.autorunJobs.get('viewtfns');
+            if (existingJob) {
+                clearInterval(existingJob.interval);
+            }
+            await ctx.reply('Fetching TFN statistics...');
+            const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+            const stats = calculateCampaignStats(calls);
+            const text = formatTFNStats(stats, session.date);
+            await ctx.reply(text, { parse_mode: 'Markdown' });
+            const job = setInterval(async () => {
+                try {
+                    const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+                    const stats = calculateCampaignStats(calls);
+                    const text = formatTFNStats(stats, session.date);
+                    await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+                }
+                catch (error) {
+                    console.error('Autorun viewtfns error:', error);
+                }
+            }, interval * 60 * 1000);
+            session.autorunJobs.set('viewtfns', { interval: job, chatId });
+            await ctx.reply(`TFN statistics autorun started (every ${interval} minutes) for date: ${session.date}`);
+        }
+        else {
+            await ctx.reply('Fetching TFN statistics...');
+            const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+            const stats = calculateCampaignStats(calls);
+            const text = formatTFNStats(stats, session.date);
+            await ctx.reply(text, { parse_mode: 'Markdown' });
+        }
     }
     catch (error) {
         await ctx.reply(`Error fetching TFN stats: ${error.message}`);
@@ -332,30 +365,85 @@ bot.command('viewtfns', async (ctx) => {
 });
 bot.command('flow', async (ctx) => {
     const userId = ctx.from.id;
+    const chatId = getChatId(ctx);
     const session = getOrCreateSession(userId);
     if (session.processing) {
-        return ctx.reply('⏳ Please wait, your previous request is still processing...');
+        return ctx.reply('Please wait, your previous request is still processing...');
     }
     session.processing = true;
     try {
-        await ctx.reply('Checking flow...');
-        const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
-        const stats = calculateCampaignStats(calls);
-        const totalFlow = calculateTotalFlow(stats);
-        let text = `*Flow Check (${session.date})*\n\n`;
-        text += `Total Flow: *${totalFlow}* (Live)\n\n`;
-        if (totalFlow < 60) {
-            text += '*⚠️ ALERT: Check flow Kindly*\n\n';
+        const args = ctx.message.text.split(' ').slice(1);
+        if (args[0] === 'start') {
+            const interval = Math.max(parseInt(args[1]) || 5, 1);
+            const existingJob = session.autorunJobs.get('flow');
+            if (existingJob) {
+                clearInterval(existingJob.interval);
+            }
+            await ctx.reply('Checking flow...');
+            const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+            const stats = calculateCampaignStats(calls);
+            const totalFlow = calculateTotalFlow(stats);
+            let text = `*Flow Check (${session.date})*\n\n`;
+            text += `Total Flow: *${totalFlow}* (Live)\n\n`;
+            if (totalFlow < 60) {
+                text += '*⚠️ ALERT: Check flow Kindly*\n\n';
+            }
+            else {
+                text += 'Flow is healthy\n\n';
+            }
+            text += '*Campaign Breakdown:*\n';
+            const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
+            sortedStats.forEach(s => {
+                text += `• ${s.name} => ${s.live}\n`;
+            });
+            await ctx.reply(text, { parse_mode: 'Markdown' });
+            const job = setInterval(async () => {
+                try {
+                    const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+                    const stats = calculateCampaignStats(calls);
+                    const totalFlow = calculateTotalFlow(stats);
+                    let text = `*Flow Check (${session.date})*\n\n`;
+                    text += `Total Flow: *${totalFlow}* (Live)\n\n`;
+                    if (totalFlow < 60) {
+                        text += '*⚠️ ALERT: Check flow Kindly*\n\n';
+                    }
+                    else {
+                        text += 'Flow is healthy\n\n';
+                    }
+                    text += '*Campaign Breakdown:*\n';
+                    const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
+                    sortedStats.forEach(s => {
+                        text += `• ${s.name} => ${s.live}\n`;
+                    });
+                    await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+                }
+                catch (error) {
+                    console.error('Autorun flow error:', error);
+                }
+            }, interval * 60 * 1000);
+            session.autorunJobs.set('flow', { interval: job, chatId });
+            await ctx.reply(`Flow check autorun started (every ${interval} minutes) for date: ${session.date}`);
         }
         else {
-            text += '✅ Flow is healthy\n\n';
+            await ctx.reply('Checking flow...');
+            const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+            const stats = calculateCampaignStats(calls);
+            const totalFlow = calculateTotalFlow(stats);
+            let text = `*Flow Check (${session.date})*\n\n`;
+            text += `Total Flow: *${totalFlow}* (Live)\n\n`;
+            if (totalFlow < 60) {
+                text += '*⚠️ ALERT: Check flow Kindly*\n\n';
+            }
+            else {
+                text += 'Flow is healthy\n\n';
+            }
+            text += '*Campaign Breakdown:*\n';
+            const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
+            sortedStats.forEach(s => {
+                text += `• ${s.name} => ${s.live}\n`;
+            });
+            await ctx.reply(text, { parse_mode: 'Markdown' });
         }
-        text += '*Campaign Breakdown:*\n';
-        const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
-        sortedStats.forEach(s => {
-            text += `• ${s.name} => ${s.live}\n`;
-        });
-        await ctx.reply(text, { parse_mode: 'Markdown' });
     }
     catch (error) {
         await ctx.reply(`Error checking flow: ${error.message}`);
