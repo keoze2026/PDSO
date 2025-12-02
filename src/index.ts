@@ -21,6 +21,7 @@ interface UserSession {
   date: string;
   autorunJobs: Map<string, { interval: NodeJS.Timeout; chatId: number }>;
   processing: boolean;
+  cachedCalls?: { data: CallData[]; timestamp: number; date: string };
 }
 
 interface CallData {
@@ -29,6 +30,7 @@ interface CallData {
   queued?: number;
   duration?: number;
   status?: { name?: string };
+  vendor_status?: { name?: string };
   called_number?: string;
 }
 
@@ -116,7 +118,17 @@ const buildParamsWithDate = (date: string, extra: Record<string, any> = {}): Rec
   };
 };
 
-const fetchAllCalls = async (workspace: string, token: string, date: string): Promise<CallData[]> => {
+const fetchAllCalls = async (workspace: string, token: string, date: string, useCache: boolean = false, session?: UserSession): Promise<CallData[]> => {
+  // Check cache if enabled and session provided
+  if (useCache && session?.cachedCalls && session.cachedCalls.date === date) {
+    const cacheAge = Date.now() - session.cachedCalls.timestamp;
+    // Cache valid for 2 minutes
+    if (cacheAge < 120000) {
+      console.log('Using cached calls data');
+      return session.cachedCalls.data;
+    }
+  }
+
   const allCalls: CallData[] = [];
   
   // Fetch first page to get total pages
@@ -135,11 +147,15 @@ const fetchAllCalls = async (workspace: string, token: string, date: string): Pr
   
   if (lastPage <= 1) {
     console.log(`Total calls fetched: ${allCalls.length} (single page)`);
+    // Cache the result
+    if (session) {
+      session.cachedCalls = { data: allCalls, timestamp: Date.now(), date };
+    }
     return allCalls;
   }
   
   // Fetch remaining pages in parallel with increased concurrency
-  const limit = pLimit(15); // Increased from 10 to 15 for faster fetching
+  const limit = pLimit(20); // Increased from 15 to 20 for faster fetching
   const pagePromises: Promise<CallData[]>[] = [];
   
   for (let page = 2; page <= lastPage; page++) {
@@ -166,7 +182,27 @@ const fetchAllCalls = async (workspace: string, token: string, date: string): Pr
   results.forEach(pageData => allCalls.push(...pageData));
   
   console.log(`Total calls fetched: ${allCalls.length} across ${lastPage} pages`);
+  
+  // Cache the result
+  if (session) {
+    session.cachedCalls = { data: allCalls, timestamp: Date.now(), date };
+  }
+  
   return allCalls;
+};
+
+const isCallConnected = (call: CallData): boolean => {
+  const isLive = call.live === 1;
+  const statusName = call.status?.name?.toLowerCase() || '';
+  const vendorStatusName = call.vendor_status?.name?.toLowerCase() || '';
+  
+  // Connected if:
+  // 1. Currently live, OR
+  // 2. Status contains "completed" with or without conversion, OR
+  // 3. Vendor status contains "completed - with conversion"
+  return isLive || 
+         statusName.includes('completed') || 
+         vendorStatusName.includes('completed - with conversion');
 };
 
 const calculateCampaignStats = (calls: CallData[]): Map<string, CampaignStats> => {
@@ -191,38 +227,34 @@ const calculateCampaignStats = (calls: CallData[]): Map<string, CampaignStats> =
     const isLive = call.live === 1;
     const isQueued = call.queued === 1;
     const duration = call.duration || 0;
-    const statusName = call.status?.name?.toLowerCase() || '';
     const tfn = call.called_number || 'Unknown';
     
-    // Track TFN live calls
-    if (isLive && tfn) {
-      if (!campaignStats.tfns.has(tfn)) {
-        campaignStats.tfns.set(tfn, { tfn, liveCount: 0, totalDuration: 0, connectedCount: 0, aht: 0 });
-      }
-      campaignStats.tfns.get(tfn)!.liveCount++;
+    // Initialize TFN stats if not exists
+    if (!campaignStats.tfns.has(tfn)) {
+      campaignStats.tfns.set(tfn, { tfn, liveCount: 0, totalDuration: 0, connectedCount: 0, aht: 0 });
     }
     
-    if (isLive) campaignStats.live++;
-    if (isQueued) campaignStats.incoming++;
+    // Track TFN live calls
+    if (isLive) {
+      campaignStats.tfns.get(tfn)!.liveCount++;
+      campaignStats.live++;
+    }
     
-    // Connected: All calls with "completed" or "with conversion" in status, OR live calls
-    const isConnected = isLive || 
-                       statusName.includes('completed') || 
-                       statusName.includes('with conversion');
+    if (isQueued) {
+      campaignStats.incoming++;
+    }
+    
+    // Check if call is connected (includes live calls)
+    const isConnected = isCallConnected(call);
     
     if (isConnected && duration > 0) {
       campaignStats.connected++;
       campaignStats.totalDuration += duration;
       
       // Track TFN duration and connected count for AHT calculation
-      if (tfn) {
-        if (!campaignStats.tfns.has(tfn)) {
-          campaignStats.tfns.set(tfn, { tfn, liveCount: 0, totalDuration: 0, connectedCount: 0, aht: 0 });
-        }
-        const tfnStats = campaignStats.tfns.get(tfn)!;
-        tfnStats.totalDuration += duration;
-        tfnStats.connectedCount++;
-      }
+      const tfnStats = campaignStats.tfns.get(tfn)!;
+      tfnStats.totalDuration += duration;
+      tfnStats.connectedCount++;
     }
   }
   
@@ -243,76 +275,103 @@ const calculateCampaignStats = (calls: CallData[]): Map<string, CampaignStats> =
   return stats;
 };
 
+const formatDuration = (seconds: number): string => {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+};
+
 const formatCampaignStats = (stats: Map<string, CampaignStats>, date: string): string => {
   if (stats.size === 0) return 'No campaigns currently active.';
   
-  const lines: string[] = [`*Campaign Stats (${date})*\n`];
+  let text = `*Campaign Stats (${date})*\n\n`;
+  
   const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
   
-  const formatTime = (seconds: number): string => {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
+  sortedStats.forEach(s => {
+    text += `*Campaign* => ${s.name}\n`;
+    text += `*TFNs:*\n`;
+    
+    // Sort TFNs for consistent display
+    const sortedTfns = Array.from(s.tfns.values()).sort((a, b) => a.tfn.localeCompare(b.tfn));
+    sortedTfns.forEach(tfn => {
+      if (tfn.liveCount > 0) {
+        text += `  ${tfn.tfn} - ${tfn.liveCount}\n`;
+      }
+    });
+    
+    text += `*Live* => ${s.live}\n`;
+    text += `*Connected* => ${s.connected}\n`;
+    text += `*AHT* => ${formatDuration(s.aht)}\n`;
+    text += `\n`;
+  });
   
-  for (const s of sortedStats) {
-    const ahtFormatted = formatTime(s.aht);
-    
-    let campaignText = `*Campaign => ${s.name}*\n`;
-    
-    // Add TFNs section with AHT
-    if (s.tfns.size > 0) {
-      campaignText += `*TFNs:*\n`;
-      const sortedTFNs = Array.from(s.tfns.values()).sort((a, b) => b.liveCount - a.liveCount);
-      sortedTFNs.forEach(tfn => {
-        const tfnAhtFormatted = formatTime(tfn.aht);
-        campaignText += `  ${tfn.tfn} - ${tfn.liveCount} (AHT-${tfnAhtFormatted})\n`;
-      });
-    }
-    
-    campaignText += `Live => ${s.live}\n`;
-    campaignText += `Connected => ${s.connected}\n`;
-    campaignText += `AHT => ${ahtFormatted}\n`;
-    
-    lines.push(campaignText);
-  }
+  return text.trim();
+};
+
+const formatTFNStats = (stats: Map<string, CampaignStats>, date: string): string => {
+  if (stats.size === 0) return 'No campaigns currently active.';
   
-  return lines.join('\n');
+  let text = `*Campaign TFN Stats (${date})*\n\n`;
+  
+  const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
+  
+  sortedStats.forEach(s => {
+    text += `*Campaign* => ${s.name}\n`;
+    text += `*TFNs:*\n`;
+    
+    // Sort TFNs for consistent display
+    const sortedTfns = Array.from(s.tfns.values()).sort((a, b) => a.tfn.localeCompare(b.tfn));
+    sortedTfns.forEach(tfn => {
+      // Only show TFNs with connected calls
+      if (tfn.connectedCount > 0) {
+        text += `  ${tfn.tfn} - ${tfn.connectedCount} (AHT ${formatDuration(tfn.aht)})\n`;
+      }
+    });
+    
+    text += `*Live* => ${s.live}\n`;
+    text += `*Connected* => ${s.connected}\n`;
+    text += `\n`;
+  });
+  
+  return text.trim();
 };
 
 const calculateTotalFlow = (stats: Map<string, CampaignStats>): number => {
   let total = 0;
   stats.forEach(s => {
-    total += s.live + s.incoming;
+    total += s.live;
   });
   return total;
 };
 
-// Get chat ID from context (works for both private and group chats)
 const getChatId = (ctx: Context): number => {
-  return ctx.chat?.id || ctx.from!.id;
+  return ctx.chat!.id;
 };
 
 // Bot commands
-bot.start(async (ctx) => {
+bot.command('start', async (ctx) => {
   const userId = ctx.from!.id;
   const session = getOrCreateSession(userId);
   
   await ctx.reply(
-    `🤖 *Dialics Campaign Statistics Bot*\n\n` +
-    `This bot displays real-time campaign statistics including:\n` +
-    `• Live calls\n` +
-    `• Incoming/queued calls\n` +
-    `• Connected calls\n` +
-    `• Average handling time (AHT)\n` +
-    `• Active TFNs per campaign\n\n` +
-    `Currently using date: *${session.date}*\n\n` +
-    `You can start using commands immediately!\n` +
-    `Use /stats to view campaign statistics.\n` +
-    `Use /flow to check total flow.\n` +
-    `Use /changedate to filter by a different date.\n` +
-    `Use /help to see all available commands.`,
+    `*Welcome to the Campaign Stats Bot!* 🤖\n\n` +
+    `*Current Date:* ${session.date}\n\n` +
+    `*Statistics:*\n` +
+    `/stats [start INTERVAL] — View campaign statistics\n` +
+    `/viewtfns — View TFN-specific statistics with AHT\n` +
+    `/flow — Check total flow and alert if below 60\n` +
+    `/stopauto — Stop all autoruns\n\n` +
+    `*Configuration:*\n` +
+    `/changedate — Change the date filter\n` +
+    `/clear — Clear your session data\n\n` +
+    `*Examples:*\n` +
+    `\`/stats\` — View current campaign stats\n` +
+    `\`/stats start 5\` — Auto-check stats every 5 minutes\n` +
+    `\`/viewtfns\` — View TFN statistics with AHT\n` +
+    `\`/flow\` — Check if total flow is below 60\n\n` +
+    `*Note:* By default, the bot uses today's date. Use /changedate to analyze a different date.`,
     { parse_mode: 'Markdown' }
   );
 });
@@ -322,10 +381,11 @@ bot.command('help', async (ctx) => {
   const session = getOrCreateSession(userId);
   
   await ctx.reply(
-    `*Available Commands*\n\n` +
+    `*Campaign Stats Bot Help* 📊\n\n` +
     `*Current Date:* ${session.date}\n\n` +
     `*Statistics:*\n` +
     `/stats [start INTERVAL] — View campaign statistics\n` +
+    `/viewtfns — View TFN-specific statistics with AHT\n` +
     `/flow — Check total flow and alert if below 60\n` +
     `/stopauto — Stop all autoruns\n\n` +
     `*Configuration:*\n` +
@@ -334,6 +394,7 @@ bot.command('help', async (ctx) => {
     `*Examples:*\n` +
     `\`/stats\` — View current campaign stats\n` +
     `\`/stats start 5\` — Auto-check stats every 5 minutes\n` +
+    `\`/viewtfns\` — View TFN statistics with AHT\n` +
     `\`/flow\` — Check if total flow is below 60\n\n` +
     `*Note:* By default, the bot uses today's date. Use /changedate to analyze a different date.`,
     { parse_mode: 'Markdown' }
@@ -363,17 +424,17 @@ bot.command('stats', async (ctx) => {
         clearInterval(existingJob.interval);
       }
       
-      // Execute immediately
+      // Execute immediately (with cache disabled for first fetch)
       await ctx.reply('Fetching statistics...');
-      const calls = await fetchAllCalls(session.workspace, session.token, session.date);
+      const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
       const stats = calculateCampaignStats(calls);
       const text = formatCampaignStats(stats, session.date);
       await ctx.reply(text, { parse_mode: 'Markdown' });
       
-      // Schedule repeating job with correct chat ID
+      // Schedule repeating job with correct chat ID (with cache enabled)
       const job = setInterval(async () => {
         try {
-          const calls = await fetchAllCalls(session.workspace, session.token, session.date);
+          const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
           const stats = calculateCampaignStats(calls);
           const text = formatCampaignStats(stats, session.date);
           await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
@@ -385,15 +446,38 @@ bot.command('stats', async (ctx) => {
       session.autorunJobs.set('stats', { interval: job, chatId });
       await ctx.reply(`✅ Statistics autorun started (every ${interval} minutes) for date: ${session.date}`);
     } else {
-      // One-time stats
+      // One-time stats (with cache disabled)
       await ctx.reply('Fetching statistics...');
-      const calls = await fetchAllCalls(session.workspace, session.token, session.date);
+      const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
       const stats = calculateCampaignStats(calls);
       const text = formatCampaignStats(stats, session.date);
       await ctx.reply(text, { parse_mode: 'Markdown' });
     }
   } catch (error: any) {
     await ctx.reply(`Error fetching stats: ${error.message}`);
+  } finally {
+    session.processing = false;
+  }
+});
+
+bot.command('viewtfns', async (ctx) => {
+  const userId = ctx.from!.id;
+  const session = getOrCreateSession(userId);
+  
+  if (session.processing) {
+    return ctx.reply('⏳ Please wait, your previous request is still processing...');
+  }
+  
+  session.processing = true;
+  
+  try {
+    await ctx.reply('Fetching TFN statistics...');
+    const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+    const stats = calculateCampaignStats(calls);
+    const text = formatTFNStats(stats, session.date);
+    await ctx.reply(text, { parse_mode: 'Markdown' });
+  } catch (error: any) {
+    await ctx.reply(`Error fetching TFN stats: ${error.message}`);
   } finally {
     session.processing = false;
   }
@@ -411,7 +495,7 @@ bot.command('flow', async (ctx) => {
   
   try {
     await ctx.reply('Checking flow...');
-    const calls = await fetchAllCalls(session.workspace, session.token, session.date);
+    const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
     const stats = calculateCampaignStats(calls);
     const totalFlow = calculateTotalFlow(stats);
     
@@ -504,10 +588,14 @@ bot.on('text', async (ctx) => {
       }
       
       session.date = text;
+      // Clear cache when date changes
+      session.cachedCalls = undefined;
+      
       await ctx.reply(
         `Date filter updated to: *${text}*\n\n` +
         `Available commands:\n` +
         `• /stats [start INTERVAL] - Campaign statistics\n` +
+        `• /viewtfns - View TFN statistics with AHT\n` +
         `• /flow - Check total flow\n` +
         `• /changedate - Change date filter\n` +
         `• /stopauto - Stop all autoruns\n` +
