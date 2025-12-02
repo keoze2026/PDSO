@@ -1,12 +1,12 @@
 // src/index.ts
 import express from 'express';
-import { Telegraf } from 'telegraf';
+import { Telegraf, Context } from 'telegraf';
 import axios from 'axios';
 import pLimit from 'p-limit';
 
 // Configuration
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8067862927:AAF15wt-h8YGfXhtdN0kOXu3MQf-zGX0gWU';
-const WEBHOOK_URL = process.env.WEBHOOK_URL || 'https://tgbot-nyyq.onrender.com';
+const WEBHOOK_URL = process.env.WEBHOOK_URL || '';
 const PORT = parseInt(process.env.PORT || '8080');
 const BASE_API = 'https://api-gateway.dialics.com/api/v1';
 
@@ -19,7 +19,7 @@ interface UserSession {
   workspace: string;
   token: string;
   date: string;
-  autorunJobs: Map<string, NodeJS.Timeout>;
+  autorunJobs: Map<string, { interval: NodeJS.Timeout; chatId: number }>;
   processing: boolean;
 }
 
@@ -29,6 +29,12 @@ interface CallData {
   queued?: number;
   duration?: number;
   status?: { name?: string };
+  called_number?: string;
+}
+
+interface TFNStats {
+  tfn: string;
+  liveCount: number;
 }
 
 interface CampaignStats {
@@ -38,6 +44,7 @@ interface CampaignStats {
   connected: number;
   totalDuration: number;
   aht: number;
+  tfns: Map<string, TFNStats>;
 }
 
 interface ApiResponse {
@@ -128,8 +135,8 @@ const fetchAllCalls = async (workspace: string, token: string, date: string): Pr
     return allCalls;
   }
   
-  // Fetch remaining pages in parallel with concurrency limit
-  const limit = pLimit(10); // 10 concurrent requests for better speed
+  // Fetch remaining pages in parallel with increased concurrency
+  const limit = pLimit(15); // Increased from 10 to 15 for faster fetching
   const pagePromises: Promise<CallData[]>[] = [];
   
   for (let page = 2; page <= lastPage; page++) {
@@ -173,6 +180,7 @@ const calculateCampaignStats = (calls: CallData[]): Map<string, CampaignStats> =
         connected: 0,
         totalDuration: 0,
         aht: 0,
+        tfns: new Map(),
       });
     }
     
@@ -181,12 +189,25 @@ const calculateCampaignStats = (calls: CallData[]): Map<string, CampaignStats> =
     const isQueued = call.queued === 1;
     const duration = call.duration || 0;
     const statusName = call.status?.name?.toLowerCase() || '';
+    const tfn = call.called_number || 'Unknown';
+    
+    // Track TFN live calls
+    if (isLive && tfn) {
+      if (!campaignStats.tfns.has(tfn)) {
+        campaignStats.tfns.set(tfn, { tfn, liveCount: 0 });
+      }
+      campaignStats.tfns.get(tfn)!.liveCount++;
+    }
     
     if (isLive) campaignStats.live++;
     if (isQueued) campaignStats.incoming++;
     
-    // Connected: live OR (duration > 0 AND not "not connected")
-    if (isLive || (duration > 0 && !statusName.includes('not connected'))) {
+    // Connected: All calls with "completed" or "with conversion" in status, OR live calls
+    const isConnected = isLive || 
+                       statusName.includes('completed') || 
+                       statusName.includes('with conversion');
+    
+    if (isConnected && duration > 0) {
       campaignStats.connected++;
       campaignStats.totalDuration += duration;
     }
@@ -202,10 +223,10 @@ const calculateCampaignStats = (calls: CallData[]): Map<string, CampaignStats> =
   return stats;
 };
 
-const formatCampaignStats = (stats: Map<string, CampaignStats>): string => {
+const formatCampaignStats = (stats: Map<string, CampaignStats>, date: string): string => {
   if (stats.size === 0) return 'No campaigns currently active.';
   
-  const lines: string[] = [];
+  const lines: string[] = [`*Campaign Stats (${date})*\n`];
   const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
   
   for (const s of sortedStats) {
@@ -214,12 +235,22 @@ const formatCampaignStats = (stats: Map<string, CampaignStats>): string => {
     const seconds = Math.floor(s.aht % 60);
     const ahtFormatted = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
     
-    lines.push(
-      `*Campaign => ${s.name}*\n` +
-      `Live => ${s.live}\n` +
-      `Connected => ${s.connected}\n` +
-      `AHT => ${ahtFormatted}\n`
-    );
+    let campaignText = `*Campaign => ${s.name}*\n`;
+    
+    // Add TFNs section
+    if (s.tfns.size > 0) {
+      campaignText += `*TFNs:*\n`;
+      const sortedTFNs = Array.from(s.tfns.values()).sort((a, b) => b.liveCount - a.liveCount);
+      sortedTFNs.forEach(tfn => {
+        campaignText += `  ${tfn.tfn} - ${tfn.liveCount}\n`;
+      });
+    }
+    
+    campaignText += `Live => ${s.live}\n`;
+    campaignText += `Connected => ${s.connected}\n`;
+    campaignText += `AHT => ${ahtFormatted}\n`;
+    
+    lines.push(campaignText);
   }
   
   return lines.join('\n');
@@ -233,9 +264,14 @@ const calculateTotalFlow = (stats: Map<string, CampaignStats>): number => {
   return total;
 };
 
+// Get chat ID from context (works for both private and group chats)
+const getChatId = (ctx: Context): number => {
+  return ctx.chat?.id || ctx.from!.id;
+};
+
 // Bot commands
 bot.start(async (ctx) => {
-  const userId = ctx.from.id;
+  const userId = ctx.from!.id;
   const session = getOrCreateSession(userId);
   
   await ctx.reply(
@@ -244,7 +280,8 @@ bot.start(async (ctx) => {
     `• Live calls\n` +
     `• Incoming/queued calls\n` +
     `• Connected calls\n` +
-    `• Average handling time (AHT)\n\n` +
+    `• Average handling time (AHT)\n` +
+    `• Active TFNs per campaign\n\n` +
     `Currently using date: *${session.date}*\n\n` +
     `You can start using commands immediately!\n` +
     `Use /stats to view campaign statistics.\n` +
@@ -256,7 +293,7 @@ bot.start(async (ctx) => {
 });
 
 bot.command('help', async (ctx) => {
-  const userId = ctx.from.id;
+  const userId = ctx.from!.id;
   const session = getOrCreateSession(userId);
   
   await ctx.reply(
@@ -279,7 +316,8 @@ bot.command('help', async (ctx) => {
 });
 
 bot.command('stats', async (ctx) => {
-  const userId = ctx.from.id;
+  const userId = ctx.from!.id;
+  const chatId = getChatId(ctx);
   const session = getOrCreateSession(userId);
   
   if (session.processing) {
@@ -289,42 +327,44 @@ bot.command('stats', async (ctx) => {
   session.processing = true;
   
   try {
-    const args = ctx.message.text.split(' ').slice(1);
+    const args = ctx.message!.text.split(' ').slice(1);
     
     if (args[0] === 'start') {
       const interval = Math.max(parseInt(args[1]) || 5, 1);
       
       // Stop existing autorun
       const existingJob = session.autorunJobs.get('stats');
-      if (existingJob) clearInterval(existingJob);
+      if (existingJob) {
+        clearInterval(existingJob.interval);
+      }
       
       // Execute immediately
       await ctx.reply('Fetching statistics...');
       const calls = await fetchAllCalls(session.workspace, session.token, session.date);
       const stats = calculateCampaignStats(calls);
-      const text = `*Campaign Statistics* (${session.date})\n\n${formatCampaignStats(stats)}`;
+      const text = formatCampaignStats(stats, session.date);
       await ctx.reply(text, { parse_mode: 'Markdown' });
       
-      // Schedule repeating job
+      // Schedule repeating job with correct chat ID
       const job = setInterval(async () => {
         try {
           const calls = await fetchAllCalls(session.workspace, session.token, session.date);
           const stats = calculateCampaignStats(calls);
-          const text = `*Campaign Statistics* (${session.date})\n\n${formatCampaignStats(stats)}`;
-          await ctx.telegram.sendMessage(userId, text, { parse_mode: 'Markdown' });
+          const text = formatCampaignStats(stats, session.date);
+          await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
         } catch (error: any) {
           console.error('Autorun stats error:', error);
         }
       }, interval * 60 * 1000);
       
-      session.autorunJobs.set('stats', job);
+      session.autorunJobs.set('stats', { interval: job, chatId });
       await ctx.reply(`✅ Statistics autorun started (every ${interval} minutes) for date: ${session.date}`);
     } else {
       // One-time stats
       await ctx.reply('Fetching statistics...');
       const calls = await fetchAllCalls(session.workspace, session.token, session.date);
       const stats = calculateCampaignStats(calls);
-      const text = `*Campaign Statistics* (${session.date})\n\n${formatCampaignStats(stats)}`;
+      const text = formatCampaignStats(stats, session.date);
       await ctx.reply(text, { parse_mode: 'Markdown' });
     }
   } catch (error: any) {
@@ -335,7 +375,7 @@ bot.command('stats', async (ctx) => {
 });
 
 bot.command('flow', async (ctx) => {
-  const userId = ctx.from.id;
+  const userId = ctx.from!.id;
   const session = getOrCreateSession(userId);
   
   if (session.processing) {
@@ -350,7 +390,7 @@ bot.command('flow', async (ctx) => {
     const stats = calculateCampaignStats(calls);
     const totalFlow = calculateTotalFlow(stats);
     
-    let text = `*Flow Check* (${session.date})\n\n`;
+    let text = `*Flow Check (${session.date})*\n\n`;
     text += `Total Flow: *${totalFlow}* (Live)\n\n`;
     
     if (totalFlow < 60) {
@@ -374,7 +414,7 @@ bot.command('flow', async (ctx) => {
 });
 
 bot.command('changedate', async (ctx) => {
-  const userId = ctx.from.id;
+  const userId = ctx.from!.id;
   const session = getOrCreateSession(userId);
   
   await ctx.reply(
@@ -387,13 +427,13 @@ bot.command('changedate', async (ctx) => {
 });
 
 bot.command('cancel', async (ctx) => {
-  const userId = ctx.from.id;
+  const userId = ctx.from!.id;
   const session = getOrCreateSession(userId);
   await ctx.reply(`Date change cancelled. Current date: *${session.date}*`, { parse_mode: 'Markdown' });
 });
 
 bot.command('stopauto', async (ctx) => {
-  const userId = ctx.from.id;
+  const userId = ctx.from!.id;
   const session = getOrCreateSession(userId);
   
   if (session.autorunJobs.size === 0) {
@@ -402,7 +442,7 @@ bot.command('stopauto', async (ctx) => {
   
   const stopped: string[] = [];
   session.autorunJobs.forEach((job, name) => {
-    clearInterval(job);
+    clearInterval(job.interval);
     stopped.push(name);
   });
   
@@ -411,11 +451,11 @@ bot.command('stopauto', async (ctx) => {
 });
 
 bot.command('clear', async (ctx) => {
-  const userId = ctx.from.id;
+  const userId = ctx.from!.id;
   const session = userSessions.get(userId);
   
   if (session) {
-    session.autorunJobs.forEach(job => clearInterval(job));
+    session.autorunJobs.forEach(job => clearInterval(job.interval));
     userSessions.delete(userId);
   }
   
@@ -424,7 +464,7 @@ bot.command('clear', async (ctx) => {
 
 // Handle date input after /changedate
 bot.on('text', async (ctx) => {
-  const userId = ctx.from.id;
+  const userId = ctx.from!.id;
   const text = ctx.message.text;
   
   // Check if it's a date format
@@ -479,13 +519,13 @@ app.get('/webhook_info', async (req, res) => {
 });
 
 // Start server
- const startServer = async () => {
+const startServer = async () => {
   if (!WEBHOOK_URL) {
-    console.error('=' .repeat(60));
+    console.error('='.repeat(60));
     console.error('CRITICAL: WEBHOOK_URL environment variable is not set!');
     console.error('Please set WEBHOOK_URL to your deployment URL');
     console.error('Example: https://yourapp.render.com');
-    console.error('=' .repeat(60));
+    console.error('='.repeat(60));
   } else {
     const webhookUrl = `${WEBHOOK_URL}/webhook`;
     await bot.telegram.setWebhook(webhookUrl);
