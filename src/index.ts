@@ -32,6 +32,7 @@ interface CallData {
   status?: { name?: string };
   vendor_status?: { name?: string };
   called_number?: string;
+  caller_number?: string;
 }
 
 interface TFNStats {
@@ -194,9 +195,10 @@ const fetchAllCalls = async (workspace: string, token: string, date: string, use
 const isCallConnected = (call: CallData): boolean => {
   const duration = call.duration || 0;
   const statusName = call.status?.name?.toLowerCase() || '';
+  const vendorStatusName = call.vendor_status?.name?.toLowerCase() || '';
   
-  // Connected if: duration > 0 AND status is NOT "Call Not Connected"
-  return duration > 0 && !statusName.includes('not connected');
+  // Connected if: duration > 0 AND (status is NOT "Call Not Connected" OR vendor_status contains "completed")
+  return (!statusName.includes('not connected') || vendorStatusName.includes('completed'));
 };
 
 const calculateCampaignStats = (calls: CallData[]): Map<string, CampaignStats> => {
@@ -297,7 +299,7 @@ const formatCampaignStats = (stats: Map<string, CampaignStats>, date: string): s
     
     // Add separator line if not the last campaign
     if (index < sortedStats.length - 1) {
-      text += `\n-----------------------------------------------------------------------------\n\n`;
+      text += `\n-----------------------------------------\n\n`;
     }
   });
   
@@ -315,10 +317,10 @@ const formatTFNStats = (stats: Map<string, CampaignStats>, date: string): string
     const campaignNumber = extractCampaignNumber(s.name);
     text += `Campaign: ${campaignNumber}\n\n`;
     
-    // Sort TFNs for consistent display
+    // Sort TFNs by connected calls in descending order (highest first)
     const sortedTfns = Array.from(s.tfns.values())
       .filter(tfn => tfn.connectedCount > 0)
-      .sort((a, b) => a.tfn.localeCompare(b.tfn));
+      .sort((a, b) => b.connectedCount - a.connectedCount);
     
     if (sortedTfns.length > 0) {
       text += `∙ TFNs:\n`;
@@ -346,7 +348,7 @@ const formatTFNStats = (stats: Map<string, CampaignStats>, date: string): string
     
     // Add separator line if not the last campaign
     if (index < sortedStats.length - 1) {
-      text += `\n-----------------------------------------------------------------------------\n\n`;
+      text += `\n-----------------------------------------\n\n`;
     }
   });
   
@@ -359,6 +361,65 @@ const calculateTotalFlow = (stats: Map<string, CampaignStats>): number => {
     total += s.live;
   });
   return total;
+};
+
+const getRepeatCallers = (calls: CallData[]): Map<string, Map<string, number>> => {
+  // Map: campaign -> caller_number -> call count
+  const callerCounts = new Map<string, Map<string, number>>();
+  
+  for (const call of calls) {
+    const campaignName = call.campaign?.name || 'Unknown Campaign';
+    const callerNumber = call.caller_number || 'Unknown';
+    
+    if (!callerCounts.has(campaignName)) {
+      callerCounts.set(campaignName, new Map());
+    }
+    
+    const campaignCallers = callerCounts.get(campaignName)!;
+    campaignCallers.set(callerNumber, (campaignCallers.get(callerNumber) || 0) + 1);
+  }
+  
+  return callerCounts;
+};
+
+const formatRepeatCallers = (callerCounts: Map<string, Map<string, number>>, date: string): string => {
+  let text = `IVR Repeat Callers (${date})\n\n`;
+  
+  const sortedCampaigns = Array.from(callerCounts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  let foundAny = false;
+  
+  sortedCampaigns.forEach(([campaignName, callers], campaignIndex) => {
+    // Filter callers with more than 3 calls
+    const repeatCallers = Array.from(callers.entries())
+      .filter(([_, count]) => count > 3)
+      .sort((a, b) => b[1] - a[1]); // Sort by count descending
+    
+    if (repeatCallers.length > 0) {
+      foundAny = true;
+      const campaignNumber = extractCampaignNumber(campaignName);
+      text += `Campaign: ${campaignNumber}\n\n`;
+      
+      repeatCallers.forEach(([callerNumber, count]) => {
+        text += `∙ ${callerNumber}: ${count} calls\n`;
+      });
+      
+      // Add separator if not last campaign with data
+      const remainingCampaigns = sortedCampaigns.slice(campaignIndex + 1);
+      const hasMoreWithData = remainingCampaigns.some(([_, callers]) => 
+        Array.from(callers.values()).some(count => count > 3)
+      );
+      
+      if (hasMoreWithData) {
+        text += `\n---------------------------------------\n\n`;
+      }
+    }
+  });
+  
+  if (!foundAny) {
+    return `IVR Repeat Callers (${date})\n\nNo callers with more than 3 calls found.`;
+  }
+  
+  return text.trim();
 };
 
 const getChatId = (ctx: Context): number => {
@@ -376,6 +437,7 @@ bot.command('start', async (ctx) => {
     `*Statistics:*\n` +
     `/stats [start INTERVAL] — View campaign statistics\n` +
     `/viewtfns [start INTERVAL] — View TFN-specific statistics with AHT\n` +
+    `/getivr — View repeat callers (>3 calls)\n` +
     `/flow [start INTERVAL] — Check total flow and alert if below 60\n` +
     `/stopauto — Stop all autoruns\n\n` +
     `*Configuration:*\n` +
@@ -385,6 +447,7 @@ bot.command('start', async (ctx) => {
     `\`/stats\` — View current campaign stats\n` +
     `\`/stats start 5\` — Auto-check stats every 5 minutes\n` +
     `\`/viewtfns start 10\` — Auto-check TFN stats every 10 minutes\n` +
+    `\`/getivr\` — View repeat callers\n` +
     `\`/flow start 3\` — Auto-check flow every 3 minutes\n\n` +
     `*Note:* By default, the bot uses today's date. Use /changedate to analyze a different date.`,
     { parse_mode: 'Markdown' }
@@ -401,6 +464,7 @@ bot.command('help', async (ctx) => {
     `*Statistics:*\n` +
     `/stats [start INTERVAL] — View campaign statistics\n` +
     `/viewtfns [start INTERVAL] — View TFN-specific statistics with AHT\n` +
+    `/getivr — View repeat callers (>3 calls)\n` +
     `/flow [start INTERVAL] — Check total flow and alert if below 60\n` +
     `/stopauto — Stop all autoruns\n\n` +
     `*Configuration:*\n` +
@@ -410,6 +474,7 @@ bot.command('help', async (ctx) => {
     `\`/stats\` — View current campaign stats\n` +
     `\`/stats start 5\` — Auto-check stats every 5 minutes\n` +
     `\`/viewtfns start 10\` — Auto-check TFN stats every 10 minutes\n` +
+    `\`/getivr\` — View repeat callers\n` +
     `\`/flow start 3\` — Auto-check flow every 3 minutes\n\n` +
     `*Note:* By default, the bot uses today's date. Use /changedate to analyze a different date.`,
     { parse_mode: 'Markdown' }
@@ -529,6 +594,29 @@ bot.command('viewtfns', async (ctx) => {
     }
   } catch (error: any) {
     await ctx.reply(`Error fetching TFN stats: ${error.message}`);
+  } finally {
+    session.processing = false;
+  }
+});
+
+bot.command('getivr', async (ctx) => {
+  const userId = ctx.from!.id;
+  const session = getOrCreateSession(userId);
+  
+  if (session.processing) {
+    return ctx.reply('Please wait, your previous request is still processing...');
+  }
+  
+  session.processing = true;
+  
+  try {
+    await ctx.reply('Fetching repeat callers...');
+    const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+    const callerCounts = getRepeatCallers(calls);
+    const text = formatRepeatCallers(callerCounts, session.date);
+    await ctx.reply(text, { parse_mode: 'Markdown' });
+  } catch (error: any) {
+    await ctx.reply(`Error fetching repeat callers: ${error.message}`);
   } finally {
     session.processing = false;
   }
