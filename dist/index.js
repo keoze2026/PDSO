@@ -114,7 +114,7 @@ const isCallConnected = (call) => {
     const duration = call.duration || 0;
     const statusName = call.status?.name?.toLowerCase() || '';
     const vendorStatusName = call.vendor_status?.name?.toLowerCase() || '';
-    return (!statusName.includes('not connected') || vendorStatusName.includes('completed'));
+    return duration > 0 && (!statusName.includes('not connected') || vendorStatusName.includes('completed'));
 };
 const calculateCampaignStats = (calls) => {
     const stats = new Map();
@@ -188,7 +188,7 @@ const formatCampaignStats = (stats, date) => {
         text += `∙ Connected: ${s.connected}\n`;
         text += `∙ Connected AHT: ${formatDuration(s.aht)}\n`;
         if (index < sortedStats.length - 1) {
-            text += `\n-----------------------------------------\n\n`;
+            text += `\n-----------------------------------------------------------------------------\n\n`;
         }
     });
     return text.trim();
@@ -220,7 +220,7 @@ const formatTFNStats = (stats, date) => {
         text += `∙ Connected: ${s.connected}\n`;
         text += `∙ Connected AHT: ${formatDuration(s.aht)}\n`;
         if (index < sortedStats.length - 1) {
-            text += `\n-----------------------------------------\n\n`;
+            text += `\n-----------------------------------------------------------------------------\n\n`;
         }
     });
     return text.trim();
@@ -263,7 +263,7 @@ const formatRepeatCallers = (callerCounts, date) => {
             const remainingCampaigns = sortedCampaigns.slice(campaignIndex + 1);
             const hasMoreWithData = remainingCampaigns.some(([_, callers]) => Array.from(callers.values()).some(count => count > 3));
             if (hasMoreWithData) {
-                text += `\n---------------------------------------\n\n`;
+                text += `\n-----------------------------------------------------------------------------\n\n`;
             }
         }
     });
@@ -336,13 +336,13 @@ bot.command('stats', async (ctx) => {
                 clearInterval(existingJob.interval);
             }
             await ctx.reply('Fetching statistics...');
-            const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+            const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
             const stats = calculateCampaignStats(calls);
             const text = formatCampaignStats(stats, session.date);
             await ctx.reply(text, { parse_mode: 'Markdown' });
             const job = setInterval(async () => {
                 try {
-                    const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+                    const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
                     const stats = calculateCampaignStats(calls);
                     const text = formatCampaignStats(stats, session.date);
                     await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
@@ -356,7 +356,7 @@ bot.command('stats', async (ctx) => {
         }
         else {
             await ctx.reply('Fetching statistics...');
-            const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+            const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
             const stats = calculateCampaignStats(calls);
             const text = formatCampaignStats(stats, session.date);
             await ctx.reply(text, { parse_mode: 'Markdown' });
@@ -386,13 +386,13 @@ bot.command('viewtfns', async (ctx) => {
                 clearInterval(existingJob.interval);
             }
             await ctx.reply('Fetching TFN statistics...');
-            const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+            const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
             const stats = calculateCampaignStats(calls);
             const text = formatTFNStats(stats, session.date);
             await ctx.reply(text, { parse_mode: 'Markdown' });
             const job = setInterval(async () => {
                 try {
-                    const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+                    const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
                     const stats = calculateCampaignStats(calls);
                     const text = formatTFNStats(stats, session.date);
                     await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
@@ -406,7 +406,7 @@ bot.command('viewtfns', async (ctx) => {
         }
         else {
             await ctx.reply('Fetching TFN statistics...');
-            const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+            const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
             const stats = calculateCampaignStats(calls);
             const text = formatTFNStats(stats, session.date);
             await ctx.reply(text, { parse_mode: 'Markdown' });
@@ -428,7 +428,7 @@ bot.command('getivr', async (ctx) => {
     session.processing = true;
     try {
         await ctx.reply('Fetching repeat callers...');
-        const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+        const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
         const callerCounts = getRepeatCallers(calls);
         const text = formatRepeatCallers(callerCounts, session.date);
         await ctx.reply(text, { parse_mode: 'Markdown' });
@@ -457,7 +457,7 @@ bot.command('flow', async (ctx) => {
                 clearInterval(existingJob.interval);
             }
             await ctx.reply('Checking flow...');
-            const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+            const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
             const stats = calculateCampaignStats(calls);
             const totalFlow = calculateTotalFlow(stats);
             let text = `*Flow Check (${session.date})*\n\n`;
@@ -476,7 +476,7 @@ bot.command('flow', async (ctx) => {
             await ctx.reply(text, { parse_mode: 'Markdown' });
             const job = setInterval(async () => {
                 try {
-                    const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+                    const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
                     const stats = calculateCampaignStats(calls);
                     const totalFlow = calculateTotalFlow(stats);
                     let text = `*Flow Check (${session.date})*\n\n`;
@@ -503,7 +503,7 @@ bot.command('flow', async (ctx) => {
         }
         else {
             await ctx.reply('Checking flow...');
-            const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+            const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
             const stats = calculateCampaignStats(calls);
             const totalFlow = calculateTotalFlow(stats);
             let text = `*Flow Check (${session.date})*\n\n`;

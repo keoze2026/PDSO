@@ -198,7 +198,7 @@ const isCallConnected = (call: CallData): boolean => {
   const vendorStatusName = call.vendor_status?.name?.toLowerCase() || '';
   
   // Connected if: duration > 0 AND (status is NOT "Call Not Connected" OR vendor_status contains "completed")
-  return (!statusName.includes('not connected') || vendorStatusName.includes('completed'));
+  return duration > 0 && (!statusName.includes('not connected') || vendorStatusName.includes('completed'));
 };
 
 const calculateCampaignStats = (calls: CallData[]): Map<string, CampaignStats> => {
@@ -299,7 +299,7 @@ const formatCampaignStats = (stats: Map<string, CampaignStats>, date: string): s
     
     // Add separator line if not the last campaign
     if (index < sortedStats.length - 1) {
-      text += `\n-----------------------------------------\n\n`;
+      text += `\n-----------------------------------------------------------------------------\n\n`;
     }
   });
   
@@ -348,7 +348,7 @@ const formatTFNStats = (stats: Map<string, CampaignStats>, date: string): string
     
     // Add separator line if not the last campaign
     if (index < sortedStats.length - 1) {
-      text += `\n-----------------------------------------\n\n`;
+      text += `\n-----------------------------------------------------------------------------\n\n`;
     }
   });
   
@@ -410,7 +410,7 @@ const formatRepeatCallers = (callerCounts: Map<string, Map<string, number>>, dat
       );
       
       if (hasMoreWithData) {
-        text += `\n---------------------------------------\n\n`;
+        text += `\n-----------------------------------------------------------------------------\n\n`;
       }
     }
   });
@@ -504,17 +504,17 @@ bot.command('stats', async (ctx) => {
         clearInterval(existingJob.interval);
       }
       
-      // Execute immediately (with cache enabled for speed)
+      // Execute immediately (without cache for fresh data)
       await ctx.reply('Fetching statistics...');
-      const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+      const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
       const stats = calculateCampaignStats(calls);
       const text = formatCampaignStats(stats, session.date);
       await ctx.reply(text, { parse_mode: 'Markdown' });
       
-      // Schedule repeating job with correct chat ID (with cache enabled)
+      // Schedule repeating job with correct chat ID (without cache for fresh data)
       const job = setInterval(async () => {
         try {
-          const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+          const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
           const stats = calculateCampaignStats(calls);
           const text = formatCampaignStats(stats, session.date);
           await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
@@ -526,9 +526,9 @@ bot.command('stats', async (ctx) => {
       session.autorunJobs.set('stats', { interval: job, chatId });
       await ctx.reply(`Statistics autorun started (every ${interval} minutes) for date: ${session.date}`);
     } else {
-      // One-time stats (with cache enabled for speed)
+      // One-time stats (without cache for fresh data)
       await ctx.reply('Fetching statistics...');
-      const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+      const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
       const stats = calculateCampaignStats(calls);
       const text = formatCampaignStats(stats, session.date);
       await ctx.reply(text, { parse_mode: 'Markdown' });
@@ -563,17 +563,17 @@ bot.command('viewtfns', async (ctx) => {
         clearInterval(existingJob.interval);
       }
       
-      // Execute immediately (with cache enabled for speed)
+      // Execute immediately (without cache for fresh data)
       await ctx.reply('Fetching TFN statistics...');
-      const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+      const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
       const stats = calculateCampaignStats(calls);
       const text = formatTFNStats(stats, session.date);
       await ctx.reply(text, { parse_mode: 'Markdown' });
       
-      // Schedule repeating job with correct chat ID (with cache enabled)
+      // Schedule repeating job with correct chat ID (without cache for fresh data)
       const job = setInterval(async () => {
         try {
-          const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+          const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
           const stats = calculateCampaignStats(calls);
           const text = formatTFNStats(stats, session.date);
           await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
@@ -585,9 +585,9 @@ bot.command('viewtfns', async (ctx) => {
       session.autorunJobs.set('viewtfns', { interval: job, chatId });
       await ctx.reply(`TFN statistics autorun started (every ${interval} minutes) for date: ${session.date}`);
     } else {
-      // One-time TFN stats
+      // One-time TFN stats (without cache for fresh data)
       await ctx.reply('Fetching TFN statistics...');
-      const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+      const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
       const stats = calculateCampaignStats(calls);
       const text = formatTFNStats(stats, session.date);
       await ctx.reply(text, { parse_mode: 'Markdown' });
@@ -611,7 +611,7 @@ bot.command('getivr', async (ctx) => {
   
   try {
     await ctx.reply('Fetching repeat callers...');
-    const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+    const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
     const callerCounts = getRepeatCallers(calls);
     const text = formatRepeatCallers(callerCounts, session.date);
     await ctx.reply(text, { parse_mode: 'Markdown' });
@@ -645,9 +645,9 @@ bot.command('flow', async (ctx) => {
         clearInterval(existingJob.interval);
       }
       
-      // Execute immediately (with cache enabled for speed)
+      // Execute immediately (without cache for fresh data)
       await ctx.reply('Checking flow...');
-      const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+      const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
       const stats = calculateCampaignStats(calls);
       const totalFlow = calculateTotalFlow(stats);
       
@@ -668,10 +668,10 @@ bot.command('flow', async (ctx) => {
       
       await ctx.reply(text, { parse_mode: 'Markdown' });
       
-      // Schedule repeating job with correct chat ID (with cache enabled)
+      // Schedule repeating job with correct chat ID (without cache for fresh data)
       const job = setInterval(async () => {
         try {
-          const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+          const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
           const stats = calculateCampaignStats(calls);
           const totalFlow = calculateTotalFlow(stats);
           
@@ -699,9 +699,9 @@ bot.command('flow', async (ctx) => {
       session.autorunJobs.set('flow', { interval: job, chatId });
       await ctx.reply(`Flow check autorun started (every ${interval} minutes) for date: ${session.date}`);
     } else {
-      // One-time flow check
+      // One-time flow check (without cache for fresh data)
       await ctx.reply('Checking flow...');
-      const calls = await fetchAllCalls(session.workspace, session.token, session.date, true, session);
+      const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
       const stats = calculateCampaignStats(calls);
       const totalFlow = calculateTotalFlow(stats);
       
