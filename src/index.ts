@@ -131,6 +131,7 @@ const fetchAllCalls = async (workspace: string, token: string, date: string, use
   }
 
   const allCalls: CallData[] = [];
+  const seenUuids = new Set<string>(); // Track unique calls to avoid duplicates
   
   // Fetch first page to get total pages
   const firstParams = buildParamsWithDate(date, { page: 1, perPage: 100 });
@@ -141,7 +142,17 @@ const fetchAllCalls = async (workspace: string, token: string, date: string, use
     return allCalls;
   }
   
-  allCalls.push(...firstResponse.payload.data);
+  // Add calls from first page with UUID tracking
+  firstResponse.payload.data.forEach(call => {
+    const uuid = (call as any).uuid;
+    if (uuid && !seenUuids.has(uuid)) {
+      seenUuids.add(uuid);
+      allCalls.push(call);
+    } else if (!uuid) {
+      allCalls.push(call); // Add calls without UUID (shouldn't happen but safe)
+    }
+  });
+  
   const lastPage = firstResponse.payload.last_page || 1;
   
   console.log(`Fetched page 1/${lastPage}: ${firstResponse.payload.data.length} calls`);
@@ -180,9 +191,21 @@ const fetchAllCalls = async (workspace: string, token: string, date: string, use
   }
   
   const results = await Promise.all(pagePromises);
-  results.forEach(pageData => allCalls.push(...pageData));
   
-  console.log(`Total calls fetched: ${allCalls.length} across ${lastPage} pages`);
+  // Add calls from remaining pages with UUID deduplication
+  results.forEach(pageData => {
+    pageData.forEach(call => {
+      const uuid = (call as any).uuid;
+      if (uuid && !seenUuids.has(uuid)) {
+        seenUuids.add(uuid);
+        allCalls.push(call);
+      } else if (!uuid) {
+        allCalls.push(call);
+      }
+    });
+  });
+  
+  console.log(`Total calls fetched: ${allCalls.length} across ${lastPage} pages (unique: ${seenUuids.size})`);
   
   // Cache the result
   if (session) {
@@ -299,7 +322,7 @@ const formatCampaignStats = (stats: Map<string, CampaignStats>, date: string): s
     
     // Add separator line if not the last campaign
     if (index < sortedStats.length - 1) {
-      text += `\n-----------------------------------------------------------------------------\n\n`;
+      text += `\n----------------------------------                                    \n\n`;
     }
   });
   
@@ -348,7 +371,7 @@ const formatTFNStats = (stats: Map<string, CampaignStats>, date: string): string
     
     // Add separator line if not the last campaign
     if (index < sortedStats.length - 1) {
-      text += `\n-----------------------------------------------------------------------------\n\n`;
+      text += `\n----------------------------------                                    \n\n`;
     }
   });
   
@@ -410,7 +433,7 @@ const formatRepeatCallers = (callerCounts: Map<string, Map<string, number>>, dat
       );
       
       if (hasMoreWithData) {
-        text += `\n-----------------------------------------------------------------------------\n\n`;
+        text += `\n----------------------------------                                    \n\n`;
       }
     }
   });

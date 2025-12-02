@@ -67,13 +67,23 @@ const fetchAllCalls = async (workspace, token, date, useCache = false, session) 
         }
     }
     const allCalls = [];
+    const seenUuids = new Set();
     const firstParams = buildParamsWithDate(date, { page: 1, perPage: 100 });
     const firstResponse = await apiGet(workspace, token, 'calls/log', firstParams);
     if (!firstResponse.success || !firstResponse.payload?.data) {
         console.warn('Unexpected response format');
         return allCalls;
     }
-    allCalls.push(...firstResponse.payload.data);
+    firstResponse.payload.data.forEach(call => {
+        const uuid = call.uuid;
+        if (uuid && !seenUuids.has(uuid)) {
+            seenUuids.add(uuid);
+            allCalls.push(call);
+        }
+        else if (!uuid) {
+            allCalls.push(call);
+        }
+    });
     const lastPage = firstResponse.payload.last_page || 1;
     console.log(`Fetched page 1/${lastPage}: ${firstResponse.payload.data.length} calls`);
     if (lastPage <= 1) {
@@ -103,8 +113,19 @@ const fetchAllCalls = async (workspace, token, date, useCache = false, session) 
         }));
     }
     const results = await Promise.all(pagePromises);
-    results.forEach(pageData => allCalls.push(...pageData));
-    console.log(`Total calls fetched: ${allCalls.length} across ${lastPage} pages`);
+    results.forEach(pageData => {
+        pageData.forEach(call => {
+            const uuid = call.uuid;
+            if (uuid && !seenUuids.has(uuid)) {
+                seenUuids.add(uuid);
+                allCalls.push(call);
+            }
+            else if (!uuid) {
+                allCalls.push(call);
+            }
+        });
+    });
+    console.log(`Total calls fetched: ${allCalls.length} across ${lastPage} pages (unique: ${seenUuids.size})`);
     if (session) {
         session.cachedCalls = { data: allCalls, timestamp: Date.now(), date };
     }
@@ -188,7 +209,7 @@ const formatCampaignStats = (stats, date) => {
         text += `∙ Connected: ${s.connected}\n`;
         text += `∙ Connected AHT: ${formatDuration(s.aht)}\n`;
         if (index < sortedStats.length - 1) {
-            text += `\n-----------------------------------------------------------------------------\n\n`;
+            text += `\n----------------------------------                                    \n\n`;
         }
     });
     return text.trim();
@@ -220,7 +241,7 @@ const formatTFNStats = (stats, date) => {
         text += `∙ Connected: ${s.connected}\n`;
         text += `∙ Connected AHT: ${formatDuration(s.aht)}\n`;
         if (index < sortedStats.length - 1) {
-            text += `\n-----------------------------------------------------------------------------\n\n`;
+            text += `\n----------------------------------                                    \n\n`;
         }
     });
     return text.trim();
@@ -263,7 +284,7 @@ const formatRepeatCallers = (callerCounts, date) => {
             const remainingCampaigns = sortedCampaigns.slice(campaignIndex + 1);
             const hasMoreWithData = remainingCampaigns.some(([_, callers]) => Array.from(callers.values()).some(count => count > 3));
             if (hasMoreWithData) {
-                text += `\n-----------------------------------------------------------------------------\n\n`;
+                text += `\n----------------------------------                                    \n\n`;
             }
         }
     });
