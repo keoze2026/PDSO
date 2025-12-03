@@ -269,17 +269,24 @@ const calculateCampaignStats = (calls: CallData[]): Map<string, CampaignStats> =
       campaignStats.incoming++;
     }
     
-    // Check if call is connected (includes live calls)
+    // Check if call is connected
     const isConnected = isCallConnected(call);
     
-    if (isConnected && duration > 0) {
+    if (isConnected) {
       campaignStats.connected++;
-      campaignStats.totalDuration += duration;
       
-      // Track TFN duration and connected count for AHT calculation
+      // Only add duration if > 0 (for AHT calculation)
+      if (duration > 0) {
+        campaignStats.totalDuration += duration;
+      }
+      
+      // Track TFN duration and connected count
       const tfnStats = campaignStats.tfns.get(tfn)!;
-      tfnStats.totalDuration += duration;
       tfnStats.connectedCount++;
+      
+      if (duration > 0) {
+        tfnStats.totalDuration += duration;
+      }
     }
   }
   
@@ -328,7 +335,7 @@ const formatCampaignStats = (stats: Map<string, CampaignStats>, date: string): s
     
     // Add separator line if not the last campaign
     if (index < sortedStats.length - 1) {
-      text += `\n--------------------------------                                      \n\n`;
+      text += `\n---------------------------------------------                       \n\n`;
     }
   });
   
@@ -381,7 +388,7 @@ const formatTFNStats = (stats: Map<string, CampaignStats>, date: string): string
     
     // Add separator line if not the last campaign
     if (index < sortedStats.length - 1) {
-      text += `\n--------------------------------                                      \n\n`;
+     text += `\n---------------------------------------------                       \n\n`;
     }
   });
   
@@ -443,7 +450,7 @@ const formatRepeatCallers = (callerCounts: Map<string, Map<string, number>>, dat
       );
       
       if (hasMoreWithData) {
-        text += `\n--------------------------------                                      \n\n`;
+        text += `\n---------------------------------------------                       \n\n`;
       }
     }
   });

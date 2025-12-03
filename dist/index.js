@@ -170,12 +170,16 @@ const calculateCampaignStats = (calls) => {
             campaignStats.incoming++;
         }
         const isConnected = isCallConnected(call);
-        if (isConnected && duration > 0) {
+        if (isConnected) {
             campaignStats.connected++;
-            campaignStats.totalDuration += duration;
+            if (duration > 0) {
+                campaignStats.totalDuration += duration;
+            }
             const tfnStats = campaignStats.tfns.get(tfn);
-            tfnStats.totalDuration += duration;
             tfnStats.connectedCount++;
+            if (duration > 0) {
+                tfnStats.totalDuration += duration;
+            }
         }
     }
     stats.forEach(s => {
@@ -211,7 +215,7 @@ const formatCampaignStats = (stats, date) => {
         text += `∙ Connected: ${s.connected}\n`;
         text += `∙ Connected AHT: ${formatDuration(s.aht)}\n`;
         if (index < sortedStats.length - 1) {
-            text += `\n--------------------------------                                      \n\n`;
+            text += `\n---------------------------------------------                       \n\n`;
         }
     });
     return text.trim();
@@ -244,7 +248,7 @@ const formatTFNStats = (stats, date) => {
         text += `∙ Connected: ${s.connected}\n`;
         text += `∙ Connected AHT: ${formatDuration(s.aht)}\n`;
         if (index < sortedStats.length - 1) {
-            text += `\n--------------------------------                                      \n\n`;
+            text += `\n---------------------------------------------                       \n\n`;
         }
     });
     return text.trim();
@@ -287,7 +291,7 @@ const formatRepeatCallers = (callerCounts, date) => {
             const remainingCampaigns = sortedCampaigns.slice(campaignIndex + 1);
             const hasMoreWithData = remainingCampaigns.some(([_, callers]) => Array.from(callers.values()).some(count => count > 3));
             if (hasMoreWithData) {
-                text += `\n--------------------------------                                      \n\n`;
+                text += `\n---------------------------------------------                       \n\n`;
             }
         }
     });
