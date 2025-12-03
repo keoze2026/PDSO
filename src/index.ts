@@ -335,7 +335,7 @@ const formatCampaignStats = (stats: Map<string, CampaignStats>, date: string): s
     
     // Add separator line if not the last campaign
     if (index < sortedStats.length - 1) {
-      text += `\n---------------------------------------------                       \n\n`;
+      text += `\n--------------------------------                           \n\n`;
     }
   });
   
@@ -361,25 +361,22 @@ const formatTFNStats = (stats: Map<string, CampaignStats>, date: string): string
     if (sortedTfns.length > 0) {
       text += `∙ TFNs:\n`;
       
-      // Use monospace code block for proper alignment
-      text += '```\n';
-      
-      // Find the maximum count length to determine the alignment position
+      // Find the maximum TFN length and count length for alignment
+      const maxTfnLength = Math.max(...sortedTfns.map(tfn => tfn.tfn.length));
       const maxCountLength = Math.max(...sortedTfns.map(tfn => tfn.connectedCount.toString().length));
       
+      // Use pre-formatted block for monospace
+      text += '<pre>';
+      
       sortedTfns.forEach(tfn => {
+        const tfnPadded = tfn.tfn.padEnd(maxTfnLength);
         const countStr = tfn.connectedCount.toString();
-        // Pad the count to align properly
-        const paddedCount = countStr.padStart(maxCountLength, ' ');
+        const countPadded = countStr.padStart(maxCountLength);
         
-        // Calculate spaces after count: base 7 spaces minus the number of digits
-        const spacesNeeded = 7 - countStr.length;
-        const spacing = ' '.repeat(spacesNeeded);
-        
-        text += `  ${tfn.tfn}: ${paddedCount}${spacing}(AHT: ${formatDuration(tfn.aht)})\n`;
+        text += `  ${tfnPadded}: ${countPadded}    (AHT: ${formatDuration(tfn.aht)})\n`;
       });
       
-      text += '```\n';
+      text += '</pre>\n';
     }
     
     text += `∙ Live: ${s.live}\n`;
@@ -388,7 +385,7 @@ const formatTFNStats = (stats: Map<string, CampaignStats>, date: string): string
     
     // Add separator line if not the last campaign
     if (index < sortedStats.length - 1) {
-     text += `\n---------------------------------------------                       \n\n`;
+      text += `\n--------------------------------                           \n\n`;
     }
   });
   
@@ -450,7 +447,7 @@ const formatRepeatCallers = (callerCounts: Map<string, Map<string, number>>, dat
       );
       
       if (hasMoreWithData) {
-        text += `\n---------------------------------------------                       \n\n`;
+        text += `\n--------------------------------                           \n\n`;
       }
     }
   });
@@ -608,7 +605,7 @@ bot.command('viewtfns', async (ctx) => {
       const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
       const stats = calculateCampaignStats(calls);
       const text = formatTFNStats(stats, session.date);
-      await ctx.reply(text);
+      await ctx.reply(text, { parse_mode: 'HTML' });
       
       // Schedule repeating job with correct chat ID (without cache for fresh data)
       const job = setInterval(async () => {
@@ -616,7 +613,7 @@ bot.command('viewtfns', async (ctx) => {
           const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
           const stats = calculateCampaignStats(calls);
           const text = formatTFNStats(stats, session.date);
-          await ctx.telegram.sendMessage(chatId, text);
+          await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'HTML' });
         } catch (error: any) {
           console.error('Autorun viewtfns error:', error);
         }
@@ -630,7 +627,7 @@ bot.command('viewtfns', async (ctx) => {
       const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
       const stats = calculateCampaignStats(calls);
       const text = formatTFNStats(stats, session.date);
-      await ctx.reply(text);
+      await ctx.reply(text, { parse_mode: 'HTML' });
     }
   } catch (error: any) {
     await ctx.reply(`Error fetching TFN stats: ${error.message}`);
