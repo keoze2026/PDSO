@@ -517,6 +517,11 @@ const getRepeatCallers = (calls: CallData[]): Map<string, Map<string, number>> =
       continue;
     }
     
+    // Only count connected calls
+    if (!isCallConnected(call)) {
+      continue;
+    }
+    
     if (!callerCounts.has(campaignName)) {
       callerCounts.set(campaignName, new Map());
     }

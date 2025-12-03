@@ -328,6 +328,9 @@ const getRepeatCallers = (calls) => {
         if (EXCLUDED_CAMPAIGNS.includes(campaignName)) {
             continue;
         }
+        if (!isCallConnected(call)) {
+            continue;
+        }
         if (!callerCounts.has(campaignName)) {
             callerCounts.set(campaignName, new Map());
         }
