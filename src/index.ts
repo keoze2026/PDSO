@@ -24,6 +24,11 @@ const WORKSPACES = [
   }
 ];
 
+// Campaigns to exclude from all statistics and reports
+const EXCLUDED_CAMPAIGNS = [
+  '11 Camp Ext'
+];
+
 // Types
 interface WorkspaceConfig {
   name: string;
@@ -321,6 +326,11 @@ const calculateCampaignStats = (calls: CallData[]): Map<string, CampaignStats> =
   for (const call of calls) {
     const campaignName = call.campaign?.name || 'Unknown Campaign';
     
+    // Skip excluded campaigns
+    if (EXCLUDED_CAMPAIGNS.includes(campaignName)) {
+      continue;
+    }
+    
     if (!stats.has(campaignName)) {
       stats.set(campaignName, {
         name: campaignName,
@@ -501,6 +511,11 @@ const getRepeatCallers = (calls: CallData[]): Map<string, Map<string, number>> =
   for (const call of calls) {
     const campaignName = call.campaign?.name || 'Unknown Campaign';
     const callerNumber = call.caller_number || 'Unknown';
+    
+    // Skip excluded campaigns
+    if (EXCLUDED_CAMPAIGNS.includes(campaignName)) {
+      continue;
+    }
     
     if (!callerCounts.has(campaignName)) {
       callerCounts.set(campaignName, new Map());

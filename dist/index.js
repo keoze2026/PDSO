@@ -23,6 +23,9 @@ const WORKSPACES = [
         token: '469458|Q7EX5xHoFzB3reLeBiyzwOm9GU1L1v8XSnVJmuIazoTw6DkKCwE8ff6mjVBr1hux8ru4zBAlRPniQBpHPvqrtR9NKat8SIP7hQpOrjk78kd3WU51aSgraIH2lBxUDYf9NTu2sPDcTDdsfbp0MR9gDXmo2VQoREnNqUk1ODsIkHbCNquG8uj1ufRH61SCdTR9kI75QI5qfo9iWKWzUd9201OLDrN5HeUDT4lsC4AKCAUGJ1RVj6GyIdsoi9nlVcau'
     }
 ];
+const EXCLUDED_CAMPAIGNS = [
+    '11 Camp Ext'
+];
 const userSessions = new Map();
 const bot = new telegraf_1.Telegraf(TELEGRAM_BOT_TOKEN);
 const app = (0, express_1.default)();
@@ -193,6 +196,9 @@ const calculateCampaignStats = (calls) => {
     const stats = new Map();
     for (const call of calls) {
         const campaignName = call.campaign?.name || 'Unknown Campaign';
+        if (EXCLUDED_CAMPAIGNS.includes(campaignName)) {
+            continue;
+        }
         if (!stats.has(campaignName)) {
             stats.set(campaignName, {
                 name: campaignName,
@@ -319,6 +325,9 @@ const getRepeatCallers = (calls) => {
     for (const call of calls) {
         const campaignName = call.campaign?.name || 'Unknown Campaign';
         const callerNumber = call.caller_number || 'Unknown';
+        if (EXCLUDED_CAMPAIGNS.includes(campaignName)) {
+            continue;
+        }
         if (!callerCounts.has(campaignName)) {
             callerCounts.set(campaignName, new Map());
         }
