@@ -11,8 +11,18 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8067862927:AAF15wt
 const WEBHOOK_URL = process.env.WEBHOOK_URL || '';
 const PORT = parseInt(process.env.PORT || '8080');
 const BASE_API = 'https://api-gateway.dialics.com/api/v1';
-const DIALICS_WORKSPACE = 'aq2O7TXNfZl7H6kjhm2LEw8OI2rJwLwD';
-const DIALICS_API_TOKEN = '463907|nVI45fhW3Dq12lUTLUWwRQyeu2Iy1Z078lHSwbIxtD2H4g0LxVjax6gj0b6kEwbVnfJjYpiHSVcXMeCyXF8rgI8OzHA2PzfmntTNZYbsIhGOmCfdlzafKSGmja479fmsf8TK0jxOhM4dKDUOR2vGE44fmInqfFUvdba0WgfgXwWJVn9YjD6TGfLGTIXnTjUTDK0ynOIYXNX65KqgvjfEuvfuiuleW6LedDjR0DeowL4lKFQkZbWfOgqwa8cmqO8u';
+const WORKSPACES = [
+    {
+        name: 'Workspace 1',
+        workspace: 'aq2O7TXNfZl7H6kjhm2LEw8OI2rJwLwD',
+        token: '463907|nVI45fhW3Dq12lUTLUWwRQyeu2Iy1Z078lHSwbIxtD2H4g0LxVjax6gj0b6kEwbVnfJjYpiHSVcXMeCyXF8rgI8OzHA2PzfmntTNZYbsIhGOmCfdlzafKSGmja479fmsf8TK0jxOhM4dKDUOR2vGE44fmInqfFUvdba0WgfgXwWJVn9YjD6TGfLGTIXnTjUTDK0ynOIYXNX65KqgvjfEuvfuiuleW6LedDjR0DeowL4lKFQkZbWfOgqwa8cmqO8u'
+    },
+    {
+        name: 'Workspace 2',
+        workspace: '08tMnbNzs66wzR6yVGf8LmabJwDQqrWq',
+        token: '469458|Q7EX5xHoFzB3reLeBiyzwOm9GU1L1v8XSnVJmuIazoTw6DkKCwE8ff6mjVBr1hux8ru4zBAlRPniQBpHPvqrtR9NKat8SIP7hQpOrjk78kd3WU51aSgraIH2lBxUDYf9NTu2sPDcTDdsfbp0MR9gDXmo2VQoREnNqUk1ODsIkHbCNquG8uj1ufRH61SCdTR9kI75QI5qfo9iWKWzUd9201OLDrN5HeUDT4lsC4AKCAUGJ1RVj6GyIdsoi9nlVcau'
+    }
+];
 const userSessions = new Map();
 const bot = new telegraf_1.Telegraf(TELEGRAM_BOT_TOKEN);
 const app = (0, express_1.default)();
@@ -23,8 +33,6 @@ const getCurrentDate = () => {
 const getOrCreateSession = (userId) => {
     if (!userSessions.has(userId)) {
         userSessions.set(userId, {
-            workspace: DIALICS_WORKSPACE,
-            token: DIALICS_API_TOKEN,
             date: getCurrentDate(),
             autorunJobs: new Map(),
             processing: false,
@@ -58,63 +66,17 @@ const buildParamsWithDate = (date, extra = {}) => {
         ...extra,
     };
 };
-const fetchAllCalls = async (workspace, token, date, useCache = false, session) => {
-    if (useCache && session?.cachedCalls && session.cachedCalls.date === date) {
-        const cacheAge = Date.now() - session.cachedCalls.timestamp;
-        if (cacheAge < 120000) {
-            console.log('Using cached calls data');
-            return session.cachedCalls.data;
+const fetchAllCallsFromSingleWorkspace = async (workspaceName, workspace, token, date) => {
+    try {
+        const allCalls = [];
+        const seenUuids = new Set();
+        const firstParams = buildParamsWithDate(date, { page: 1, perPage: 100 });
+        const firstResponse = await apiGet(workspace, token, 'calls/log', firstParams);
+        if (!firstResponse.success || !firstResponse.payload?.data) {
+            console.warn(`[${workspaceName}] Unexpected response format`);
+            return { workspaceName, calls: [], success: false, error: 'Unexpected response format' };
         }
-    }
-    const allCalls = [];
-    const seenUuids = new Set();
-    const firstParams = buildParamsWithDate(date, { page: 1, perPage: 100 });
-    const firstResponse = await apiGet(workspace, token, 'calls/log', firstParams);
-    if (!firstResponse.success || !firstResponse.payload?.data) {
-        console.warn('Unexpected response format');
-        return allCalls;
-    }
-    firstResponse.payload.data.forEach(call => {
-        const uuid = call.uuid;
-        if (uuid && !seenUuids.has(uuid)) {
-            seenUuids.add(uuid);
-            allCalls.push(call);
-        }
-        else if (!uuid) {
-            allCalls.push(call);
-        }
-    });
-    const lastPage = firstResponse.payload.last_page || 1;
-    console.log(`Fetched page 1/${lastPage}: ${firstResponse.payload.data.length} calls`);
-    if (lastPage <= 1) {
-        console.log(`Total calls fetched: ${allCalls.length} (single page)`);
-        if (session) {
-            session.cachedCalls = { data: allCalls, timestamp: Date.now(), date };
-        }
-        return allCalls;
-    }
-    const limit = (0, p_limit_1.default)(25);
-    const pagePromises = [];
-    for (let page = 2; page <= lastPage; page++) {
-        pagePromises.push(limit(async () => {
-            try {
-                const params = buildParamsWithDate(date, { page, perPage: 100 });
-                const response = await apiGet(workspace, token, 'calls/log', params);
-                if (response.success && response.payload?.data) {
-                    console.log(`Fetched page ${page}/${lastPage}: ${response.payload.data.length} calls`);
-                    return response.payload.data;
-                }
-                return [];
-            }
-            catch (error) {
-                console.error(`Error fetching page ${page}:`, error);
-                return [];
-            }
-        }));
-    }
-    const results = await Promise.all(pagePromises);
-    results.forEach(pageData => {
-        pageData.forEach(call => {
+        firstResponse.payload.data.forEach(call => {
             const uuid = call.uuid;
             if (uuid && !seenUuids.has(uuid)) {
                 seenUuids.add(uuid);
@@ -124,8 +86,96 @@ const fetchAllCalls = async (workspace, token, date, useCache = false, session) 
                 allCalls.push(call);
             }
         });
+        const lastPage = firstResponse.payload.last_page || 1;
+        console.log(`[${workspaceName}] Fetched page 1/${lastPage}: ${firstResponse.payload.data.length} calls`);
+        if (lastPage <= 1) {
+            console.log(`[${workspaceName}] Total calls fetched: ${allCalls.length} (single page)`);
+            return { workspaceName, calls: allCalls, success: true };
+        }
+        const limit = (0, p_limit_1.default)(25);
+        const pagePromises = [];
+        for (let page = 2; page <= lastPage; page++) {
+            pagePromises.push(limit(async () => {
+                try {
+                    const params = buildParamsWithDate(date, { page, perPage: 100 });
+                    const response = await apiGet(workspace, token, 'calls/log', params);
+                    if (response.success && response.payload?.data) {
+                        console.log(`[${workspaceName}] Fetched page ${page}/${lastPage}: ${response.payload.data.length} calls`);
+                        return response.payload.data;
+                    }
+                    return [];
+                }
+                catch (error) {
+                    console.error(`[${workspaceName}] Error fetching page ${page}:`, error);
+                    return [];
+                }
+            }));
+        }
+        const results = await Promise.all(pagePromises);
+        results.forEach(pageData => {
+            pageData.forEach(call => {
+                const uuid = call.uuid;
+                if (uuid && !seenUuids.has(uuid)) {
+                    seenUuids.add(uuid);
+                    allCalls.push(call);
+                }
+                else if (!uuid) {
+                    allCalls.push(call);
+                }
+            });
+        });
+        console.log(`[${workspaceName}] Total calls fetched: ${allCalls.length} across ${lastPage} pages (unique: ${seenUuids.size})`);
+        return { workspaceName, calls: allCalls, success: true };
+    }
+    catch (error) {
+        console.error(`[${workspaceName}] Error fetching calls:`, error);
+        return { workspaceName, calls: [], success: false, error: error.message };
+    }
+};
+const fetchAllCallsFromMultipleWorkspaces = async (workspaceConfigs, date, useCache = false, session) => {
+    if (useCache && session?.cachedCalls && session.cachedCalls.date === date) {
+        const cacheAge = Date.now() - session.cachedCalls.timestamp;
+        if (cacheAge < 120000) {
+            console.log('Using cached calls data');
+            return session.cachedCalls.data;
+        }
+    }
+    console.log(`Fetching calls from ${workspaceConfigs.length} workspaces in parallel...`);
+    const fetchPromises = workspaceConfigs.map(config => fetchAllCallsFromSingleWorkspace(config.name, config.workspace, config.token, date));
+    const results = await Promise.all(fetchPromises);
+    const successfulWorkspaces = [];
+    const failedWorkspaces = [];
+    results.forEach(result => {
+        if (result.success) {
+            successfulWorkspaces.push(`${result.workspaceName} (${result.calls.length} calls)`);
+        }
+        else {
+            failedWorkspaces.push(`${result.workspaceName} (${result.error || 'unknown error'})`);
+        }
     });
-    console.log(`Total calls fetched: ${allCalls.length} across ${lastPage} pages (unique: ${seenUuids.size})`);
+    if (successfulWorkspaces.length > 0) {
+        console.log(`✓ Successful fetches: ${successfulWorkspaces.join(', ')}`);
+    }
+    if (failedWorkspaces.length > 0) {
+        console.warn(`✗ Failed fetches: ${failedWorkspaces.join(', ')}`);
+    }
+    const allCalls = [];
+    const globalSeenUuids = new Set();
+    results.forEach(result => {
+        if (result.success) {
+            result.calls.forEach(call => {
+                const uuid = call.uuid;
+                if (uuid && !globalSeenUuids.has(uuid)) {
+                    globalSeenUuids.add(uuid);
+                    allCalls.push(call);
+                }
+                else if (!uuid) {
+                    allCalls.push(call);
+                }
+            });
+        }
+    });
+    console.log(`Total merged calls: ${allCalls.length} (unique across all workspaces)`);
     if (session) {
         session.cachedCalls = { data: allCalls, timestamp: Date.now(), date };
     }
@@ -200,8 +250,12 @@ const formatDuration = (seconds) => {
     return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 };
 const extractCampaignNumber = (campaignName) => {
-    const match = campaignName.match(/(\d+)/);
-    return match ? match[1] : campaignName;
+    const campPattern = /^Camp(?:aign)?\s+(\d+)$/i;
+    const match = campaignName.match(campPattern);
+    if (match) {
+        return match[1];
+    }
+    return campaignName;
 };
 const formatCampaignStats = (stats, date) => {
     if (stats.size === 0)
@@ -209,8 +263,8 @@ const formatCampaignStats = (stats, date) => {
     let text = `Campaign Stats (${date})\n\n`;
     const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
     sortedStats.forEach((s, index) => {
-        const campaignNumber = extractCampaignNumber(s.name);
-        text += `Campaign: ${campaignNumber}\n\n`;
+        const campaignDisplay = extractCampaignNumber(s.name);
+        text += `Campaign: ${campaignDisplay}\n\n`;
         text += `∙ Live: ${s.live}\n`;
         text += `∙ Connected: ${s.connected}\n`;
         text += `∙ Connected AHT: ${formatDuration(s.aht)}\n`;
@@ -226,8 +280,8 @@ const formatTFNStats = (stats, date) => {
     let text = `Campaign TFN Stats (${date})\n\n`;
     const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
     sortedStats.forEach((s, index) => {
-        const campaignNumber = extractCampaignNumber(s.name);
-        text += `Campaign: ${campaignNumber}\n\n`;
+        const campaignDisplay = extractCampaignNumber(s.name);
+        text += `Campaign: ${campaignDisplay}\n\n`;
         const sortedTfns = Array.from(s.tfns.values())
             .filter(tfn => tfn.connectedCount > 0)
             .sort((a, b) => b.connectedCount - a.connectedCount);
@@ -283,8 +337,8 @@ const formatRepeatCallers = (callerCounts, date) => {
             .sort((a, b) => b[1] - a[1]);
         if (repeatCallers.length > 0) {
             foundAny = true;
-            const campaignNumber = extractCampaignNumber(campaignName);
-            text += `Campaign: ${campaignNumber}\n\n`;
+            const campaignDisplay = extractCampaignNumber(campaignName);
+            text += `Campaign: ${campaignDisplay}\n\n`;
             repeatCallers.forEach(([callerNumber, count]) => {
                 text += `∙ ${callerNumber}: ${count} calls\n`;
             });
@@ -307,7 +361,8 @@ bot.command('start', async (ctx) => {
     const userId = ctx.from.id;
     const session = getOrCreateSession(userId);
     await ctx.reply(`*Welcome to the Campaign Stats Bot!*\n\n` +
-        `*Current Date:* ${session.date}\n\n` +
+        `*Current Date:* ${session.date}\n` +
+        `*Workspaces:* ${WORKSPACES.length} workspaces configured\n\n` +
         `*Statistics:*\n` +
         `/stats [start INTERVAL] — View campaign statistics\n` +
         `/viewtfns [start INTERVAL] — View TFN-specific statistics with AHT\n` +
@@ -323,13 +378,14 @@ bot.command('start', async (ctx) => {
         `\`/viewtfns start 10\` — Auto-check TFN stats every 10 minutes\n` +
         `\`/getivr\` — View repeat callers\n` +
         `\`/flow start 3\` — Auto-check flow every 3 minutes\n\n` +
-        `*Note:* By default, the bot uses today's date. Use /changedate to analyze a different date.`, { parse_mode: 'Markdown' });
+        `*Note:* The bot fetches data from multiple workspaces simultaneously for faster results. By default, it uses today's date. Use /changedate to analyze a different date.`, { parse_mode: 'Markdown' });
 });
 bot.command('help', async (ctx) => {
     const userId = ctx.from.id;
     const session = getOrCreateSession(userId);
     await ctx.reply(`*Campaign Stats Bot Help*\n\n` +
-        `*Current Date:* ${session.date}\n\n` +
+        `*Current Date:* ${session.date}\n` +
+        `*Workspaces:* ${WORKSPACES.length} workspaces configured\n\n` +
         `*Statistics:*\n` +
         `/stats [start INTERVAL] — View campaign statistics\n` +
         `/viewtfns [start INTERVAL] — View TFN-specific statistics with AHT\n` +
@@ -345,7 +401,7 @@ bot.command('help', async (ctx) => {
         `\`/viewtfns start 10\` — Auto-check TFN stats every 10 minutes\n` +
         `\`/getivr\` — View repeat callers\n` +
         `\`/flow start 3\` — Auto-check flow every 3 minutes\n\n` +
-        `*Note:* By default, the bot uses today's date. Use /changedate to analyze a different date.`, { parse_mode: 'Markdown' });
+        `*Note:* The bot fetches data from multiple workspaces simultaneously. By default, it uses today's date. Use /changedate to analyze a different date.`, { parse_mode: 'Markdown' });
 });
 bot.command('stats', async (ctx) => {
     const userId = ctx.from.id;
@@ -363,14 +419,14 @@ bot.command('stats', async (ctx) => {
             if (existingJob) {
                 clearInterval(existingJob.interval);
             }
-            await ctx.reply('Fetching statistics...');
-            const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
+            await ctx.reply('Fetching statistics from all workspaces...');
+            const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
             const stats = calculateCampaignStats(calls);
             const text = formatCampaignStats(stats, session.date);
             await ctx.reply(text, { parse_mode: 'Markdown' });
             const job = setInterval(async () => {
                 try {
-                    const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
+                    const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
                     const stats = calculateCampaignStats(calls);
                     const text = formatCampaignStats(stats, session.date);
                     await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
@@ -383,8 +439,8 @@ bot.command('stats', async (ctx) => {
             await ctx.reply(`Statistics autorun started (every ${interval} minutes) for date: ${session.date}`);
         }
         else {
-            await ctx.reply('Fetching statistics...');
-            const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
+            await ctx.reply('Fetching statistics from all workspaces...');
+            const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
             const stats = calculateCampaignStats(calls);
             const text = formatCampaignStats(stats, session.date);
             await ctx.reply(text, { parse_mode: 'Markdown' });
@@ -413,14 +469,14 @@ bot.command('viewtfns', async (ctx) => {
             if (existingJob) {
                 clearInterval(existingJob.interval);
             }
-            await ctx.reply('Fetching TFN statistics...');
-            const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
+            await ctx.reply('Fetching TFN statistics from all workspaces...');
+            const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
             const stats = calculateCampaignStats(calls);
             const text = formatTFNStats(stats, session.date);
             await ctx.reply(text, { parse_mode: 'HTML' });
             const job = setInterval(async () => {
                 try {
-                    const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
+                    const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
                     const stats = calculateCampaignStats(calls);
                     const text = formatTFNStats(stats, session.date);
                     await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'HTML' });
@@ -433,8 +489,8 @@ bot.command('viewtfns', async (ctx) => {
             await ctx.reply(`TFN statistics autorun started (every ${interval} minutes) for date: ${session.date}`);
         }
         else {
-            await ctx.reply('Fetching TFN statistics...');
-            const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
+            await ctx.reply('Fetching TFN statistics from all workspaces...');
+            const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
             const stats = calculateCampaignStats(calls);
             const text = formatTFNStats(stats, session.date);
             await ctx.reply(text, { parse_mode: 'HTML' });
@@ -455,8 +511,8 @@ bot.command('getivr', async (ctx) => {
     }
     session.processing = true;
     try {
-        await ctx.reply('Fetching repeat callers...');
-        const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
+        await ctx.reply('Fetching repeat callers from all workspaces...');
+        const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
         const callerCounts = getRepeatCallers(calls);
         const text = formatRepeatCallers(callerCounts, session.date);
         await ctx.reply(text, { parse_mode: 'Markdown' });
@@ -484,8 +540,8 @@ bot.command('flow', async (ctx) => {
             if (existingJob) {
                 clearInterval(existingJob.interval);
             }
-            await ctx.reply('Checking flow...');
-            const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
+            await ctx.reply('Checking flow from all workspaces...');
+            const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
             const stats = calculateCampaignStats(calls);
             const totalFlow = calculateTotalFlow(stats);
             let text = `*Flow Check (${session.date})*\n\n`;
@@ -504,7 +560,7 @@ bot.command('flow', async (ctx) => {
             await ctx.reply(text, { parse_mode: 'Markdown' });
             const job = setInterval(async () => {
                 try {
-                    const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
+                    const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
                     const stats = calculateCampaignStats(calls);
                     const totalFlow = calculateTotalFlow(stats);
                     let text = `*Flow Check (${session.date})*\n\n`;
@@ -530,8 +586,8 @@ bot.command('flow', async (ctx) => {
             await ctx.reply(`Flow check autorun started (every ${interval} minutes) for date: ${session.date}`);
         }
         else {
-            await ctx.reply('Checking flow...');
-            const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
+            await ctx.reply('Checking flow from all workspaces...');
+            const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
             const stats = calculateCampaignStats(calls);
             const totalFlow = calculateTotalFlow(stats);
             let text = `*Flow Check (${session.date})*\n\n`;
@@ -621,10 +677,14 @@ bot.on('text', async (ctx) => {
     }
 });
 app.get('/', (req, res) => {
-    res.send('Bot is running');
+    res.send('Bot is running with multi-workspace support');
 });
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+    res.json({
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        workspaces: WORKSPACES.length
+    });
 });
 app.post('/webhook', (req, res) => {
     bot.handleUpdate(req.body);
@@ -654,6 +714,12 @@ const startServer = async () => {
         const info = await bot.telegram.getWebhookInfo();
         console.log('Webhook info:', info);
     }
+    console.log('='.repeat(60));
+    console.log(`Configured workspaces: ${WORKSPACES.length}`);
+    WORKSPACES.forEach((ws, index) => {
+        console.log(`  ${index + 1}. ${ws.name}: ${ws.workspace}`);
+    });
+    console.log('='.repeat(60));
     app.listen(PORT, '0.0.0.0', () => {
         console.log(`Server running on port ${PORT}`);
         console.log(`Default date for new sessions: ${getCurrentDate()}`);

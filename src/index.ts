@@ -10,14 +10,28 @@ const WEBHOOK_URL = process.env.WEBHOOK_URL || '';
 const PORT = parseInt(process.env.PORT || '8080');
 const BASE_API = 'https://api-gateway.dialics.com/api/v1';
 
-// Hardcoded credentials
-const DIALICS_WORKSPACE = 'aq2O7TXNfZl7H6kjhm2LEw8OI2rJwLwD';
-const DIALICS_API_TOKEN = '463907|nVI45fhW3Dq12lUTLUWwRQyeu2Iy1Z078lHSwbIxtD2H4g0LxVjax6gj0b6kEwbVnfJjYpiHSVcXMeCyXF8rgI8OzHA2PzfmntTNZYbsIhGOmCfdlzafKSGmja479fmsf8TK0jxOhM4dKDUOR2vGE44fmInqfFUvdba0WgfgXwWJVn9YjD6TGfLGTIXnTjUTDK0ynOIYXNX65KqgvjfEuvfuiuleW6LedDjR0DeowL4lKFQkZbWfOgqwa8cmqO8u';
+// Workspace configurations
+const WORKSPACES = [
+  {
+    name: 'Workspace 1',
+    workspace: 'aq2O7TXNfZl7H6kjhm2LEw8OI2rJwLwD',
+    token: '463907|nVI45fhW3Dq12lUTLUWwRQyeu2Iy1Z078lHSwbIxtD2H4g0LxVjax6gj0b6kEwbVnfJjYpiHSVcXMeCyXF8rgI8OzHA2PzfmntTNZYbsIhGOmCfdlzafKSGmja479fmsf8TK0jxOhM4dKDUOR2vGE44fmInqfFUvdba0WgfgXwWJVn9YjD6TGfLGTIXnTjUTDK0ynOIYXNX65KqgvjfEuvfuiuleW6LedDjR0DeowL4lKFQkZbWfOgqwa8cmqO8u'
+  },
+  {
+    name: 'Workspace 2',
+    workspace: '08tMnbNzs66wzR6yVGf8LmabJwDQqrWq',
+    token: '469458|Q7EX5xHoFzB3reLeBiyzwOm9GU1L1v8XSnVJmuIazoTw6DkKCwE8ff6mjVBr1hux8ru4zBAlRPniQBpHPvqrtR9NKat8SIP7hQpOrjk78kd3WU51aSgraIH2lBxUDYf9NTu2sPDcTDdsfbp0MR9gDXmo2VQoREnNqUk1ODsIkHbCNquG8uj1ufRH61SCdTR9kI75QI5qfo9iWKWzUd9201OLDrN5HeUDT4lsC4AKCAUGJ1RVj6GyIdsoi9nlVcau'
+  }
+];
 
 // Types
-interface UserSession {
+interface WorkspaceConfig {
+  name: string;
   workspace: string;
   token: string;
+}
+
+interface UserSession {
   date: string;
   autorunJobs: Map<string, { interval: NodeJS.Timeout; chatId: number }>;
   processing: boolean;
@@ -25,6 +39,7 @@ interface UserSession {
 }
 
 interface CallData {
+  uuid?: string;
   campaign?: { name?: string };
   live?: number;
   queued?: number;
@@ -62,6 +77,13 @@ interface ApiResponse {
   };
 }
 
+interface WorkspaceFetchResult {
+  workspaceName: string;
+  calls: CallData[];
+  success: boolean;
+  error?: string;
+}
+
 // User sessions storage
 const userSessions = new Map<number, UserSession>();
 
@@ -80,8 +102,6 @@ const getCurrentDate = (): string => {
 const getOrCreateSession = (userId: number): UserSession => {
   if (!userSessions.has(userId)) {
     userSessions.set(userId, {
-      workspace: DIALICS_WORKSPACE,
-      token: DIALICS_API_TOKEN,
       date: getCurrentDate(),
       autorunJobs: new Map(),
       processing: false,
@@ -119,7 +139,98 @@ const buildParamsWithDate = (date: string, extra: Record<string, any> = {}): Rec
   };
 };
 
-const fetchAllCalls = async (workspace: string, token: string, date: string, useCache: boolean = false, session?: UserSession): Promise<CallData[]> => {
+const fetchAllCallsFromSingleWorkspace = async (
+  workspaceName: string,
+  workspace: string,
+  token: string,
+  date: string
+): Promise<WorkspaceFetchResult> => {
+  try {
+    const allCalls: CallData[] = [];
+    const seenUuids = new Set<string>();
+    
+    // Fetch first page to get total pages
+    const firstParams = buildParamsWithDate(date, { page: 1, perPage: 100 });
+    const firstResponse: ApiResponse = await apiGet(workspace, token, 'calls/log', firstParams);
+    
+    if (!firstResponse.success || !firstResponse.payload?.data) {
+      console.warn(`[${workspaceName}] Unexpected response format`);
+      return { workspaceName, calls: [], success: false, error: 'Unexpected response format' };
+    }
+    
+    // Add calls from first page with UUID tracking
+    firstResponse.payload.data.forEach(call => {
+      const uuid = call.uuid;
+      if (uuid && !seenUuids.has(uuid)) {
+        seenUuids.add(uuid);
+        allCalls.push(call);
+      } else if (!uuid) {
+        allCalls.push(call);
+      }
+    });
+    
+    const lastPage = firstResponse.payload.last_page || 1;
+    console.log(`[${workspaceName}] Fetched page 1/${lastPage}: ${firstResponse.payload.data.length} calls`);
+    
+    if (lastPage <= 1) {
+      console.log(`[${workspaceName}] Total calls fetched: ${allCalls.length} (single page)`);
+      return { workspaceName, calls: allCalls, success: true };
+    }
+    
+    // Fetch remaining pages in parallel
+    const limit = pLimit(25);
+    const pagePromises: Promise<CallData[]>[] = [];
+    
+    for (let page = 2; page <= lastPage; page++) {
+      pagePromises.push(
+        limit(async () => {
+          try {
+            const params = buildParamsWithDate(date, { page, perPage: 100 });
+            const response: ApiResponse = await apiGet(workspace, token, 'calls/log', params);
+            
+            if (response.success && response.payload?.data) {
+              console.log(`[${workspaceName}] Fetched page ${page}/${lastPage}: ${response.payload.data.length} calls`);
+              return response.payload.data;
+            }
+            return [];
+          } catch (error) {
+            console.error(`[${workspaceName}] Error fetching page ${page}:`, error);
+            return [];
+          }
+        })
+      );
+    }
+    
+    const results = await Promise.all(pagePromises);
+    
+    // Add calls from remaining pages with UUID deduplication
+    results.forEach(pageData => {
+      pageData.forEach(call => {
+        const uuid = call.uuid;
+        if (uuid && !seenUuids.has(uuid)) {
+          seenUuids.add(uuid);
+          allCalls.push(call);
+        } else if (!uuid) {
+          allCalls.push(call);
+        }
+      });
+    });
+    
+    console.log(`[${workspaceName}] Total calls fetched: ${allCalls.length} across ${lastPage} pages (unique: ${seenUuids.size})`);
+    return { workspaceName, calls: allCalls, success: true };
+    
+  } catch (error: any) {
+    console.error(`[${workspaceName}] Error fetching calls:`, error);
+    return { workspaceName, calls: [], success: false, error: error.message };
+  }
+};
+
+const fetchAllCallsFromMultipleWorkspaces = async (
+  workspaceConfigs: WorkspaceConfig[],
+  date: string,
+  useCache: boolean = false,
+  session?: UserSession
+): Promise<CallData[]> => {
   // Check cache if enabled and session provided
   if (useCache && session?.cachedCalls && session.cachedCalls.date === date) {
     const cacheAge = Date.now() - session.cachedCalls.timestamp;
@@ -130,82 +241,54 @@ const fetchAllCalls = async (workspace: string, token: string, date: string, use
     }
   }
 
+  console.log(`Fetching calls from ${workspaceConfigs.length} workspaces in parallel...`);
+  
+  // Fetch from all workspaces in parallel
+  const fetchPromises = workspaceConfigs.map(config =>
+    fetchAllCallsFromSingleWorkspace(config.name, config.workspace, config.token, date)
+  );
+  
+  const results = await Promise.all(fetchPromises);
+  
+  // Log results from each workspace
+  const successfulWorkspaces: string[] = [];
+  const failedWorkspaces: string[] = [];
+  
+  results.forEach(result => {
+    if (result.success) {
+      successfulWorkspaces.push(`${result.workspaceName} (${result.calls.length} calls)`);
+    } else {
+      failedWorkspaces.push(`${result.workspaceName} (${result.error || 'unknown error'})`);
+    }
+  });
+  
+  if (successfulWorkspaces.length > 0) {
+    console.log(`✓ Successful fetches: ${successfulWorkspaces.join(', ')}`);
+  }
+  
+  if (failedWorkspaces.length > 0) {
+    console.warn(`✗ Failed fetches: ${failedWorkspaces.join(', ')}`);
+  }
+  
+  // Merge all calls with UUID deduplication across workspaces
   const allCalls: CallData[] = [];
-  const seenUuids = new Set<string>(); // Track unique calls to avoid duplicates
+  const globalSeenUuids = new Set<string>();
   
-  // Fetch first page to get total pages
-  const firstParams = buildParamsWithDate(date, { page: 1, perPage: 100 });
-  const firstResponse: ApiResponse = await apiGet(workspace, token, 'calls/log', firstParams);
-  
-  if (!firstResponse.success || !firstResponse.payload?.data) {
-    console.warn('Unexpected response format');
-    return allCalls;
-  }
-  
-  // Add calls from first page with UUID tracking
-  firstResponse.payload.data.forEach(call => {
-    const uuid = (call as any).uuid;
-    if (uuid && !seenUuids.has(uuid)) {
-      seenUuids.add(uuid);
-      allCalls.push(call);
-    } else if (!uuid) {
-      allCalls.push(call); // Add calls without UUID (shouldn't happen but safe)
-    }
-  });
-  
-  const lastPage = firstResponse.payload.last_page || 1;
-  
-  console.log(`Fetched page 1/${lastPage}: ${firstResponse.payload.data.length} calls`);
-  
-  if (lastPage <= 1) {
-    console.log(`Total calls fetched: ${allCalls.length} (single page)`);
-    // Cache the result
-    if (session) {
-      session.cachedCalls = { data: allCalls, timestamp: Date.now(), date };
-    }
-    return allCalls;
-  }
-  
-  // Fetch remaining pages in parallel with increased concurrency
-  const limit = pLimit(25); // Increased to 25 for maximum speed
-  const pagePromises: Promise<CallData[]>[] = [];
-  
-  for (let page = 2; page <= lastPage; page++) {
-    pagePromises.push(
-      limit(async () => {
-        try {
-          const params = buildParamsWithDate(date, { page, perPage: 100 });
-          const response: ApiResponse = await apiGet(workspace, token, 'calls/log', params);
-          
-          if (response.success && response.payload?.data) {
-            console.log(`Fetched page ${page}/${lastPage}: ${response.payload.data.length} calls`);
-            return response.payload.data;
-          }
-          return [];
-        } catch (error) {
-          console.error(`Error fetching page ${page}:`, error);
-          return [];
+  results.forEach(result => {
+    if (result.success) {
+      result.calls.forEach(call => {
+        const uuid = call.uuid;
+        if (uuid && !globalSeenUuids.has(uuid)) {
+          globalSeenUuids.add(uuid);
+          allCalls.push(call);
+        } else if (!uuid) {
+          allCalls.push(call);
         }
-      })
-    );
-  }
-  
-  const results = await Promise.all(pagePromises);
-  
-  // Add calls from remaining pages with UUID deduplication
-  results.forEach(pageData => {
-    pageData.forEach(call => {
-      const uuid = (call as any).uuid;
-      if (uuid && !seenUuids.has(uuid)) {
-        seenUuids.add(uuid);
-        allCalls.push(call);
-      } else if (!uuid) {
-        allCalls.push(call);
-      }
-    });
+      });
+    }
   });
   
-  console.log(`Total calls fetched: ${allCalls.length} across ${lastPage} pages (unique: ${seenUuids.size})`);
+  console.log(`Total merged calls: ${allCalls.length} (unique across all workspaces)`);
   
   // Cache the result
   if (session) {
@@ -314,9 +397,18 @@ const formatDuration = (seconds: number): string => {
 };
 
 const extractCampaignNumber = (campaignName: string): string => {
-  // Extract number from campaign name (e.g., "Camp 01" -> "01", "Campaign 123" -> "123")
-  const match = campaignName.match(/(\d+)/);
-  return match ? match[1] : campaignName;
+  // Check if campaign name matches pattern "Camp XX" or "Campaign XX" (where XX is a number)
+  // If so, extract just the number. Otherwise, return the full campaign name.
+  const campPattern = /^Camp(?:aign)?\s+(\d+)$/i;
+  const match = campaignName.match(campPattern);
+  
+  if (match) {
+    // Return just the number for "Camp 01" -> "01" format
+    return match[1];
+  }
+  
+  // For other formats like "PDSO 02", return the full name
+  return campaignName;
 };
 
 const formatCampaignStats = (stats: Map<string, CampaignStats>, date: string): string => {
@@ -327,8 +419,8 @@ const formatCampaignStats = (stats: Map<string, CampaignStats>, date: string): s
   const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
   
   sortedStats.forEach((s, index) => {
-    const campaignNumber = extractCampaignNumber(s.name);
-    text += `Campaign: ${campaignNumber}\n\n`;
+    const campaignDisplay = extractCampaignNumber(s.name);
+    text += `Campaign: ${campaignDisplay}\n\n`;
     text += `∙ Live: ${s.live}\n`;
     text += `∙ Connected: ${s.connected}\n`;
     text += `∙ Connected AHT: ${formatDuration(s.aht)}\n`;
@@ -350,8 +442,8 @@ const formatTFNStats = (stats: Map<string, CampaignStats>, date: string): string
   const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
   
   sortedStats.forEach((s, index) => {
-    const campaignNumber = extractCampaignNumber(s.name);
-    text += `Campaign: ${campaignNumber}\n\n`;
+    const campaignDisplay = extractCampaignNumber(s.name);
+    text += `Campaign: ${campaignDisplay}\n\n`;
     
     // Sort TFNs by connected calls in descending order (highest first)
     const sortedTfns = Array.from(s.tfns.values())
@@ -433,8 +525,8 @@ const formatRepeatCallers = (callerCounts: Map<string, Map<string, number>>, dat
     
     if (repeatCallers.length > 0) {
       foundAny = true;
-      const campaignNumber = extractCampaignNumber(campaignName);
-      text += `Campaign: ${campaignNumber}\n\n`;
+      const campaignDisplay = extractCampaignNumber(campaignName);
+      text += `Campaign: ${campaignDisplay}\n\n`;
       
       repeatCallers.forEach(([callerNumber, count]) => {
         text += `∙ ${callerNumber}: ${count} calls\n`;
@@ -470,7 +562,8 @@ bot.command('start', async (ctx) => {
   
   await ctx.reply(
     `*Welcome to the Campaign Stats Bot!*\n\n` +
-    `*Current Date:* ${session.date}\n\n` +
+    `*Current Date:* ${session.date}\n` +
+    `*Workspaces:* ${WORKSPACES.length} workspaces configured\n\n` +
     `*Statistics:*\n` +
     `/stats [start INTERVAL] — View campaign statistics\n` +
     `/viewtfns [start INTERVAL] — View TFN-specific statistics with AHT\n` +
@@ -486,7 +579,7 @@ bot.command('start', async (ctx) => {
     `\`/viewtfns start 10\` — Auto-check TFN stats every 10 minutes\n` +
     `\`/getivr\` — View repeat callers\n` +
     `\`/flow start 3\` — Auto-check flow every 3 minutes\n\n` +
-    `*Note:* By default, the bot uses today's date. Use /changedate to analyze a different date.`,
+    `*Note:* The bot fetches data from multiple workspaces simultaneously for faster results. By default, it uses today's date. Use /changedate to analyze a different date.`,
     { parse_mode: 'Markdown' }
   );
 });
@@ -497,7 +590,8 @@ bot.command('help', async (ctx) => {
   
   await ctx.reply(
     `*Campaign Stats Bot Help*\n\n` +
-    `*Current Date:* ${session.date}\n\n` +
+    `*Current Date:* ${session.date}\n` +
+    `*Workspaces:* ${WORKSPACES.length} workspaces configured\n\n` +
     `*Statistics:*\n` +
     `/stats [start INTERVAL] — View campaign statistics\n` +
     `/viewtfns [start INTERVAL] — View TFN-specific statistics with AHT\n` +
@@ -513,7 +607,7 @@ bot.command('help', async (ctx) => {
     `\`/viewtfns start 10\` — Auto-check TFN stats every 10 minutes\n` +
     `\`/getivr\` — View repeat callers\n` +
     `\`/flow start 3\` — Auto-check flow every 3 minutes\n\n` +
-    `*Note:* By default, the bot uses today's date. Use /changedate to analyze a different date.`,
+    `*Note:* The bot fetches data from multiple workspaces simultaneously. By default, it uses today's date. Use /changedate to analyze a different date.`,
     { parse_mode: 'Markdown' }
   );
 });
@@ -542,8 +636,8 @@ bot.command('stats', async (ctx) => {
       }
       
       // Execute immediately (without cache for fresh data)
-      await ctx.reply('Fetching statistics...');
-      const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
+      await ctx.reply('Fetching statistics from all workspaces...');
+      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
       const stats = calculateCampaignStats(calls);
       const text = formatCampaignStats(stats, session.date);
       await ctx.reply(text, { parse_mode: 'Markdown' });
@@ -551,7 +645,7 @@ bot.command('stats', async (ctx) => {
       // Schedule repeating job with correct chat ID (without cache for fresh data)
       const job = setInterval(async () => {
         try {
-          const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
+          const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
           const stats = calculateCampaignStats(calls);
           const text = formatCampaignStats(stats, session.date);
           await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
@@ -564,8 +658,8 @@ bot.command('stats', async (ctx) => {
       await ctx.reply(`Statistics autorun started (every ${interval} minutes) for date: ${session.date}`);
     } else {
       // One-time stats (without cache for fresh data)
-      await ctx.reply('Fetching statistics...');
-      const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
+      await ctx.reply('Fetching statistics from all workspaces...');
+      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
       const stats = calculateCampaignStats(calls);
       const text = formatCampaignStats(stats, session.date);
       await ctx.reply(text, { parse_mode: 'Markdown' });
@@ -601,8 +695,8 @@ bot.command('viewtfns', async (ctx) => {
       }
       
       // Execute immediately (without cache for fresh data)
-      await ctx.reply('Fetching TFN statistics...');
-      const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
+      await ctx.reply('Fetching TFN statistics from all workspaces...');
+      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
       const stats = calculateCampaignStats(calls);
       const text = formatTFNStats(stats, session.date);
       await ctx.reply(text, { parse_mode: 'HTML' });
@@ -610,7 +704,7 @@ bot.command('viewtfns', async (ctx) => {
       // Schedule repeating job with correct chat ID (without cache for fresh data)
       const job = setInterval(async () => {
         try {
-          const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
+          const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
           const stats = calculateCampaignStats(calls);
           const text = formatTFNStats(stats, session.date);
           await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'HTML' });
@@ -623,8 +717,8 @@ bot.command('viewtfns', async (ctx) => {
       await ctx.reply(`TFN statistics autorun started (every ${interval} minutes) for date: ${session.date}`);
     } else {
       // One-time TFN stats (without cache for fresh data)
-      await ctx.reply('Fetching TFN statistics...');
-      const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
+      await ctx.reply('Fetching TFN statistics from all workspaces...');
+      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
       const stats = calculateCampaignStats(calls);
       const text = formatTFNStats(stats, session.date);
       await ctx.reply(text, { parse_mode: 'HTML' });
@@ -647,8 +741,8 @@ bot.command('getivr', async (ctx) => {
   session.processing = true;
   
   try {
-    await ctx.reply('Fetching repeat callers...');
-    const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
+    await ctx.reply('Fetching repeat callers from all workspaces...');
+    const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
     const callerCounts = getRepeatCallers(calls);
     const text = formatRepeatCallers(callerCounts, session.date);
     await ctx.reply(text, { parse_mode: 'Markdown' });
@@ -683,8 +777,8 @@ bot.command('flow', async (ctx) => {
       }
       
       // Execute immediately (without cache for fresh data)
-      await ctx.reply('Checking flow...');
-      const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
+      await ctx.reply('Checking flow from all workspaces...');
+      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
       const stats = calculateCampaignStats(calls);
       const totalFlow = calculateTotalFlow(stats);
       
@@ -708,7 +802,7 @@ bot.command('flow', async (ctx) => {
       // Schedule repeating job with correct chat ID (without cache for fresh data)
       const job = setInterval(async () => {
         try {
-          const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
+          const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
           const stats = calculateCampaignStats(calls);
           const totalFlow = calculateTotalFlow(stats);
           
@@ -737,8 +831,8 @@ bot.command('flow', async (ctx) => {
       await ctx.reply(`Flow check autorun started (every ${interval} minutes) for date: ${session.date}`);
     } else {
       // One-time flow check (without cache for fresh data)
-      await ctx.reply('Checking flow...');
-      const calls = await fetchAllCalls(session.workspace, session.token, session.date, false, session);
+      await ctx.reply('Checking flow from all workspaces...');
+      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
       const stats = calculateCampaignStats(calls);
       const totalFlow = calculateTotalFlow(stats);
       
@@ -854,11 +948,15 @@ bot.on('text', async (ctx) => {
 
 // Express routes
 app.get('/', (req, res) => {
-  res.send('Bot is running');
+  res.send('Bot is running with multi-workspace support');
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    workspaces: WORKSPACES.length
+  });
 });
 
 app.post('/webhook', (req, res) => {
@@ -891,6 +989,13 @@ const startServer = async () => {
     const info = await bot.telegram.getWebhookInfo();
     console.log('Webhook info:', info);
   }
+  
+  console.log('='.repeat(60));
+  console.log(`Configured workspaces: ${WORKSPACES.length}`);
+  WORKSPACES.forEach((ws, index) => {
+    console.log(`  ${index + 1}. ${ws.name}: ${ws.workspace}`);
+  });
+  console.log('='.repeat(60));
   
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
