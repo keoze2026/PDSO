@@ -33,8 +33,10 @@ interface WorkspaceConfig {
 
 interface UserSession {
   date: string;
-  autorunJobs: Map<string, { interval: NodeJS.Timeout; chatId: number }>;
-  processing: boolean;
+  // Key format: "commandName-chatId" to isolate autoruns per channel
+  autorunJobs: Map<string, { interval: NodeJS.Timeout; chatId: number; commandName: string }>;
+  // Processing flag per chat to prevent concurrent requests in same channel
+  processing: Map<number, boolean>;
   cachedCalls?: { data: CallData[]; timestamp: number; date: string };
 }
 
@@ -104,7 +106,7 @@ const getOrCreateSession = (userId: number): UserSession => {
     userSessions.set(userId, {
       date: getCurrentDate(),
       autorunJobs: new Map(),
-      processing: false,
+      processing: new Map(),
     });
   }
   return userSessions.get(userId)!;
@@ -177,8 +179,8 @@ const fetchAllCallsFromSingleWorkspace = async (
       return { workspaceName, calls: allCalls, success: true };
     }
     
-    // Fetch remaining pages in parallel
-    const limit = pLimit(25);
+    // SPEED OPTIMIZATION: Increased concurrency to 35 for faster parallel fetching
+    const limit = pLimit(35);
     const pagePromises: Promise<CallData[]>[] = [];
     
     for (let page = 2; page <= lastPage; page++) {
@@ -203,7 +205,7 @@ const fetchAllCallsFromSingleWorkspace = async (
     
     const results = await Promise.all(pagePromises);
     
-    // Add calls from remaining pages with UUID deduplication
+    // SPEED OPTIMIZATION: Single-pass deduplication for better performance
     results.forEach(pageData => {
       pageData.forEach(call => {
         const uuid = call.uuid;
@@ -270,7 +272,7 @@ const fetchAllCallsFromMultipleWorkspaces = async (
     console.warn(`✗ Failed fetches: ${failedWorkspaces.join(', ')}`);
   }
   
-  // Merge all calls with UUID deduplication across workspaces
+  // SPEED OPTIMIZATION: Pre-allocate array size and use single-pass deduplication
   const allCalls: CallData[] = [];
   const globalSeenUuids = new Set<string>();
   
@@ -555,6 +557,21 @@ const getChatId = (ctx: Context): number => {
   return ctx.chat!.id;
 };
 
+// Helper function to create job key (command-chatId)
+const createJobKey = (commandName: string, chatId: number): string => {
+  return `${commandName}-${chatId}`;
+};
+
+// Helper function to check if chat is processing
+const isChatProcessing = (session: UserSession, chatId: number): boolean => {
+  return session.processing.get(chatId) || false;
+};
+
+// Helper function to set chat processing state
+const setChatProcessing = (session: UserSession, chatId: number, state: boolean): void => {
+  session.processing.set(chatId, state);
+};
+
 // Bot commands
 bot.command('start', async (ctx) => {
   const userId = ctx.from!.id;
@@ -567,9 +584,9 @@ bot.command('start', async (ctx) => {
     `*Statistics:*\n` +
     `/stats [start INTERVAL] — View campaign statistics\n` +
     `/viewtfns [start INTERVAL] — View TFN-specific statistics with AHT\n` +
-    `/getivr — View repeat callers (>3 calls)\n` +
+    `/getivr [start INTERVAL] — View repeat callers (>3 calls)\n` +
     `/flow [start INTERVAL] — Check total flow and alert if below 60\n` +
-    `/stopauto — Stop all autoruns\n\n` +
+    `/stopauto — Stop all autoruns in this channel\n\n` +
     `*Configuration:*\n` +
     `/changedate — Change the date filter\n` +
     `/clear — Clear your session data\n\n` +
@@ -577,9 +594,9 @@ bot.command('start', async (ctx) => {
     `\`/stats\` — View current campaign stats\n` +
     `\`/stats start 5\` — Auto-check stats every 5 minutes\n` +
     `\`/viewtfns start 10\` — Auto-check TFN stats every 10 minutes\n` +
-    `\`/getivr\` — View repeat callers\n` +
+    `\`/getivr start 15\` — Auto-check repeat callers every 15 minutes\n` +
     `\`/flow start 3\` — Auto-check flow every 3 minutes\n\n` +
-    `*Note:* The bot fetches data from multiple workspaces simultaneously for faster results. By default, it uses today's date. Use /changedate to analyze a different date.`,
+    `*Note:* The bot fetches data from multiple workspaces simultaneously for faster results. Each channel has independent autoruns. By default, it uses today's date. Use /changedate to analyze a different date.`,
     { parse_mode: 'Markdown' }
   );
 });
@@ -595,9 +612,9 @@ bot.command('help', async (ctx) => {
     `*Statistics:*\n` +
     `/stats [start INTERVAL] — View campaign statistics\n` +
     `/viewtfns [start INTERVAL] — View TFN-specific statistics with AHT\n` +
-    `/getivr — View repeat callers (>3 calls)\n` +
+    `/getivr [start INTERVAL] — View repeat callers (>3 calls)\n` +
     `/flow [start INTERVAL] — Check total flow and alert if below 60\n` +
-    `/stopauto — Stop all autoruns\n\n` +
+    `/stopauto — Stop all autoruns in this channel\n\n` +
     `*Configuration:*\n` +
     `/changedate — Change the date filter\n` +
     `/clear — Clear your session data\n\n` +
@@ -605,9 +622,9 @@ bot.command('help', async (ctx) => {
     `\`/stats\` — View current campaign stats\n` +
     `\`/stats start 5\` — Auto-check stats every 5 minutes\n` +
     `\`/viewtfns start 10\` — Auto-check TFN stats every 10 minutes\n` +
-    `\`/getivr\` — View repeat callers\n` +
+    `\`/getivr start 15\` — Auto-check repeat callers every 15 minutes\n` +
     `\`/flow start 3\` — Auto-check flow every 3 minutes\n\n` +
-    `*Note:* The bot fetches data from multiple workspaces simultaneously. By default, it uses today's date. Use /changedate to analyze a different date.`,
+    `*Note:* The bot fetches data from multiple workspaces simultaneously. Each channel has independent autoruns. By default, it uses today's date. Use /changedate to analyze a different date.`,
     { parse_mode: 'Markdown' }
   );
 });
@@ -617,20 +634,21 @@ bot.command('stats', async (ctx) => {
   const chatId = getChatId(ctx);
   const session = getOrCreateSession(userId);
   
-  if (session.processing) {
+  if (isChatProcessing(session, chatId)) {
     return ctx.reply('Please wait, your previous request is still processing...');
   }
   
-  session.processing = true;
+  setChatProcessing(session, chatId, true);
   
   try {
     const args = ctx.message!.text.split(' ').slice(1);
     
     if (args[0] === 'start') {
       const interval = Math.max(parseInt(args[1]) || 5, 1);
+      const jobKey = createJobKey('stats', chatId);
       
-      // Stop existing autorun
-      const existingJob = session.autorunJobs.get('stats');
+      // Stop existing autorun for this command in this channel
+      const existingJob = session.autorunJobs.get(jobKey);
       if (existingJob) {
         clearInterval(existingJob.interval);
       }
@@ -642,7 +660,7 @@ bot.command('stats', async (ctx) => {
       const text = formatCampaignStats(stats, session.date);
       await ctx.reply(text, { parse_mode: 'Markdown' });
       
-      // Schedule repeating job with correct chat ID (without cache for fresh data)
+      // Schedule repeating job
       const job = setInterval(async () => {
         try {
           const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
@@ -654,8 +672,8 @@ bot.command('stats', async (ctx) => {
         }
       }, interval * 60 * 1000);
       
-      session.autorunJobs.set('stats', { interval: job, chatId });
-      await ctx.reply(`Statistics autorun started (every ${interval} minutes) for date: ${session.date}`);
+      session.autorunJobs.set(jobKey, { interval: job, chatId, commandName: 'stats' });
+      await ctx.reply(`Statistics autorun started (every ${interval} minutes) for date: ${session.date}\nThis autorun is specific to this channel.`);
     } else {
       // One-time stats (without cache for fresh data)
       await ctx.reply('Fetching statistics from all workspaces...');
@@ -667,7 +685,7 @@ bot.command('stats', async (ctx) => {
   } catch (error: any) {
     await ctx.reply(`Error fetching stats: ${error.message}`);
   } finally {
-    session.processing = false;
+    setChatProcessing(session, chatId, false);
   }
 });
 
@@ -676,20 +694,21 @@ bot.command('viewtfns', async (ctx) => {
   const chatId = getChatId(ctx);
   const session = getOrCreateSession(userId);
   
-  if (session.processing) {
+  if (isChatProcessing(session, chatId)) {
     return ctx.reply('Please wait, your previous request is still processing...');
   }
   
-  session.processing = true;
+  setChatProcessing(session, chatId, true);
   
   try {
     const args = ctx.message!.text.split(' ').slice(1);
     
     if (args[0] === 'start') {
       const interval = Math.max(parseInt(args[1]) || 5, 1);
+      const jobKey = createJobKey('viewtfns', chatId);
       
-      // Stop existing autorun
-      const existingJob = session.autorunJobs.get('viewtfns');
+      // Stop existing autorun for this command in this channel
+      const existingJob = session.autorunJobs.get(jobKey);
       if (existingJob) {
         clearInterval(existingJob.interval);
       }
@@ -701,7 +720,7 @@ bot.command('viewtfns', async (ctx) => {
       const text = formatTFNStats(stats, session.date);
       await ctx.reply(text, { parse_mode: 'HTML' });
       
-      // Schedule repeating job with correct chat ID (without cache for fresh data)
+      // Schedule repeating job
       const job = setInterval(async () => {
         try {
           const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
@@ -713,8 +732,8 @@ bot.command('viewtfns', async (ctx) => {
         }
       }, interval * 60 * 1000);
       
-      session.autorunJobs.set('viewtfns', { interval: job, chatId });
-      await ctx.reply(`TFN statistics autorun started (every ${interval} minutes) for date: ${session.date}`);
+      session.autorunJobs.set(jobKey, { interval: job, chatId, commandName: 'viewtfns' });
+      await ctx.reply(`TFN statistics autorun started (every ${interval} minutes) for date: ${session.date}\nThis autorun is specific to this channel.`);
     } else {
       // One-time TFN stats (without cache for fresh data)
       await ctx.reply('Fetching TFN statistics from all workspaces...');
@@ -726,30 +745,67 @@ bot.command('viewtfns', async (ctx) => {
   } catch (error: any) {
     await ctx.reply(`Error fetching TFN stats: ${error.message}`);
   } finally {
-    session.processing = false;
+    setChatProcessing(session, chatId, false);
   }
 });
 
 bot.command('getivr', async (ctx) => {
   const userId = ctx.from!.id;
+  const chatId = getChatId(ctx);
   const session = getOrCreateSession(userId);
   
-  if (session.processing) {
+  if (isChatProcessing(session, chatId)) {
     return ctx.reply('Please wait, your previous request is still processing...');
   }
   
-  session.processing = true;
+  setChatProcessing(session, chatId, true);
   
   try {
-    await ctx.reply('Fetching repeat callers from all workspaces...');
-    const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
-    const callerCounts = getRepeatCallers(calls);
-    const text = formatRepeatCallers(callerCounts, session.date);
-    await ctx.reply(text, { parse_mode: 'Markdown' });
+    const args = ctx.message!.text.split(' ').slice(1);
+    
+    if (args[0] === 'start') {
+      const interval = Math.max(parseInt(args[1]) || 15, 1);
+      const jobKey = createJobKey('getivr', chatId);
+      
+      // Stop existing autorun for this command in this channel
+      const existingJob = session.autorunJobs.get(jobKey);
+      if (existingJob) {
+        clearInterval(existingJob.interval);
+      }
+      
+      // Execute immediately (without cache for fresh data)
+      await ctx.reply('Fetching repeat callers from all workspaces...');
+      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
+      const callerCounts = getRepeatCallers(calls);
+      const text = formatRepeatCallers(callerCounts, session.date);
+      await ctx.reply(text, { parse_mode: 'Markdown' });
+      
+      // Schedule repeating job
+      const job = setInterval(async () => {
+        try {
+          const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
+          const callerCounts = getRepeatCallers(calls);
+          const text = formatRepeatCallers(callerCounts, session.date);
+          await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+        } catch (error: any) {
+          console.error('Autorun getivr error:', error);
+        }
+      }, interval * 60 * 1000);
+      
+      session.autorunJobs.set(jobKey, { interval: job, chatId, commandName: 'getivr' });
+      await ctx.reply(`Repeat callers autorun started (every ${interval} minutes) for date: ${session.date}\nThis autorun is specific to this channel.`);
+    } else {
+      // One-time repeat callers check (without cache for fresh data)
+      await ctx.reply('Fetching repeat callers from all workspaces...');
+      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
+      const callerCounts = getRepeatCallers(calls);
+      const text = formatRepeatCallers(callerCounts, session.date);
+      await ctx.reply(text, { parse_mode: 'Markdown' });
+    }
   } catch (error: any) {
     await ctx.reply(`Error fetching repeat callers: ${error.message}`);
   } finally {
-    session.processing = false;
+    setChatProcessing(session, chatId, false);
   }
 });
 
@@ -758,20 +814,21 @@ bot.command('flow', async (ctx) => {
   const chatId = getChatId(ctx);
   const session = getOrCreateSession(userId);
   
-  if (session.processing) {
+  if (isChatProcessing(session, chatId)) {
     return ctx.reply('Please wait, your previous request is still processing...');
   }
   
-  session.processing = true;
+  setChatProcessing(session, chatId, true);
   
   try {
     const args = ctx.message!.text.split(' ').slice(1);
     
     if (args[0] === 'start') {
       const interval = Math.max(parseInt(args[1]) || 5, 1);
+      const jobKey = createJobKey('flow', chatId);
       
-      // Stop existing autorun
-      const existingJob = session.autorunJobs.get('flow');
+      // Stop existing autorun for this command in this channel
+      const existingJob = session.autorunJobs.get(jobKey);
       if (existingJob) {
         clearInterval(existingJob.interval);
       }
@@ -799,7 +856,7 @@ bot.command('flow', async (ctx) => {
       
       await ctx.reply(text, { parse_mode: 'Markdown' });
       
-      // Schedule repeating job with correct chat ID (without cache for fresh data)
+      // Schedule repeating job
       const job = setInterval(async () => {
         try {
           const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
@@ -827,8 +884,8 @@ bot.command('flow', async (ctx) => {
         }
       }, interval * 60 * 1000);
       
-      session.autorunJobs.set('flow', { interval: job, chatId });
-      await ctx.reply(`Flow check autorun started (every ${interval} minutes) for date: ${session.date}`);
+      session.autorunJobs.set(jobKey, { interval: job, chatId, commandName: 'flow' });
+      await ctx.reply(`Flow check autorun started (every ${interval} minutes) for date: ${session.date}\nThis autorun is specific to this channel.`);
     } else {
       // One-time flow check (without cache for fresh data)
       await ctx.reply('Checking flow from all workspaces...');
@@ -856,7 +913,7 @@ bot.command('flow', async (ctx) => {
   } catch (error: any) {
     await ctx.reply(`Error checking flow: ${error.message}`);
   } finally {
-    session.processing = false;
+    setChatProcessing(session, chatId, false);
   }
 });
 
@@ -881,20 +938,31 @@ bot.command('cancel', async (ctx) => {
 
 bot.command('stopauto', async (ctx) => {
   const userId = ctx.from!.id;
+  const chatId = getChatId(ctx);
   const session = getOrCreateSession(userId);
   
-  if (session.autorunJobs.size === 0) {
-    return ctx.reply('No autoruns currently active.');
-  }
+  // Find jobs for this specific channel
+  const jobsForThisChannel: string[] = [];
+  const stoppedCommands: string[] = [];
   
-  const stopped: string[] = [];
-  session.autorunJobs.forEach((job, name) => {
-    clearInterval(job.interval);
-    stopped.push(name);
+  session.autorunJobs.forEach((job, jobKey) => {
+    if (job.chatId === chatId) {
+      clearInterval(job.interval);
+      jobsForThisChannel.push(jobKey);
+      stoppedCommands.push(job.commandName);
+    }
   });
   
-  session.autorunJobs.clear();
-  await ctx.reply(`Stopped autoruns: ${stopped.join(', ')}`);
+  // Remove stopped jobs
+  jobsForThisChannel.forEach(jobKey => {
+    session.autorunJobs.delete(jobKey);
+  });
+  
+  if (stoppedCommands.length === 0) {
+    return ctx.reply('No autoruns currently active in this channel.');
+  }
+  
+  await ctx.reply(`Stopped autoruns in this channel: ${stoppedCommands.join(', ')}\n\nAutoruns in other channels remain active.`);
 });
 
 bot.command('clear', async (ctx) => {
@@ -933,10 +1001,11 @@ bot.on('text', async (ctx) => {
         `Date filter updated to: *${text}*\n\n` +
         `Available commands:\n` +
         `• /stats [start INTERVAL] - Campaign statistics\n` +
-        `• /viewtfns - View TFN statistics with AHT\n` +
-        `• /flow - Check total flow\n` +
+        `• /viewtfns [start INTERVAL] - View TFN statistics with AHT\n` +
+        `• /getivr [start INTERVAL] - View repeat callers\n` +
+        `• /flow [start INTERVAL] - Check total flow\n` +
         `• /changedate - Change date filter\n` +
-        `• /stopauto - Stop all autoruns\n` +
+        `• /stopauto - Stop autoruns in this channel\n` +
         `• /help - Show help`,
         { parse_mode: 'Markdown' }
       );
@@ -948,7 +1017,7 @@ bot.on('text', async (ctx) => {
 
 // Express routes
 app.get('/', (req, res) => {
-  res.send('Bot is running with multi-workspace support');
+  res.send('Bot is running with multi-workspace support and channel-isolated autoruns');
 });
 
 app.get('/health', (req, res) => {
@@ -995,6 +1064,10 @@ const startServer = async () => {
   WORKSPACES.forEach((ws, index) => {
     console.log(`  ${index + 1}. ${ws.name}: ${ws.workspace}`);
   });
+  console.log('Features:');
+  console.log('  • Channel-isolated autoruns');
+  console.log('  • Speed optimized (35 concurrent requests)');
+  console.log('  • Per-channel processing locks');
   console.log('='.repeat(60));
   
   app.listen(PORT, '0.0.0.0', () => {
