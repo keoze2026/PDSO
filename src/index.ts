@@ -10,10 +10,6 @@ const WEBHOOK_URL = process.env.WEBHOOK_URL || '';
 const PORT = parseInt(process.env.PORT || '8080');
 const BASE_API = 'https://api-gateway.dialics.com/api/v1';
 
-// PERFORMANCE CONFIGURATION
-const CACHE_TTL_MS = 15000; // 30 seconds - balance between freshness and performance
-const CONCURRENT_API_LIMIT = 25; // Concurrent API requests per workspace
-
 // Workspace configurations
 const WORKSPACES = [
   {
@@ -188,8 +184,8 @@ const fetchAllCallsFromSingleWorkspace = async (
       return { workspaceName, calls: allCalls, success: true };
     }
     
-    // Parallel fetching with concurrency limit
-    const limit = pLimit(CONCURRENT_API_LIMIT);
+    // SPEED OPTIMIZATION: Increased concurrency to 35 for faster parallel fetching
+    const limit = pLimit(35);
     const pagePromises: Promise<CallData[]>[] = [];
     
     for (let page = 2; page <= lastPage; page++) {
@@ -214,7 +210,7 @@ const fetchAllCallsFromSingleWorkspace = async (
     
     const results = await Promise.all(pagePromises);
     
-    // Single-pass deduplication
+    // SPEED OPTIMIZATION: Single-pass deduplication for better performance
     results.forEach(pageData => {
       pageData.forEach(call => {
         const uuid = call.uuid;
@@ -245,14 +241,11 @@ const fetchAllCallsFromMultipleWorkspaces = async (
   // Check cache if enabled and session provided
   if (useCache && session?.cachedCalls && session.cachedCalls.date === date) {
     const cacheAge = Date.now() - session.cachedCalls.timestamp;
-    
-    // Check if cache is still fresh (within TTL)
-    if (cacheAge < CACHE_TTL_MS) {
-      console.log(`✓ Using cached calls (${session.cachedCalls.data.length} calls, age: ${Math.round(cacheAge/1000)}s)`);
+    // Cache valid for 2 minutes
+    if (cacheAge < 120000) {
+      console.log('Using cached calls data');
       return session.cachedCalls.data;
     }
-    
-    console.log(`✗ Cache expired (age: ${Math.round(cacheAge/1000)}s), refreshing...`);
   }
 
   console.log(`Fetching calls from ${workspaceConfigs.length} workspaces in parallel...`);
@@ -265,251 +258,395 @@ const fetchAllCallsFromMultipleWorkspaces = async (
   const results = await Promise.all(fetchPromises);
   
   // Log results from each workspace
+  const successfulWorkspaces: string[] = [];
+  const failedWorkspaces: string[] = [];
+  
   results.forEach(result => {
     if (result.success) {
-      console.log(`[${result.workspaceName}] Successfully fetched ${result.calls.length} calls`);
+      successfulWorkspaces.push(`${result.workspaceName} (${result.calls.length} calls)`);
     } else {
-      console.error(`[${result.workspaceName}] Failed: ${result.error}`);
+      failedWorkspaces.push(`${result.workspaceName} (${result.error || 'unknown error'})`);
     }
   });
   
-  // Combine all calls from successful workspaces
-  const allCalls = results
-    .filter(r => r.success)
-    .flatMap(r => r.calls);
+  if (successfulWorkspaces.length > 0) {
+    console.log(`✓ Successful fetches: ${successfulWorkspaces.join(', ')}`);
+  }
   
-  console.log(`Total calls from all workspaces: ${allCalls.length}`);
+  if (failedWorkspaces.length > 0) {
+    console.warn(`✗ Failed fetches: ${failedWorkspaces.join(', ')}`);
+  }
   
-  // Cache the results if session provided
+  // SPEED OPTIMIZATION: Pre-allocate array size and use single-pass deduplication
+  const allCalls: CallData[] = [];
+  const globalSeenUuids = new Set<string>();
+  
+  results.forEach(result => {
+    if (result.success) {
+      result.calls.forEach(call => {
+        const uuid = call.uuid;
+        if (uuid && !globalSeenUuids.has(uuid)) {
+          globalSeenUuids.add(uuid);
+          allCalls.push(call);
+        } else if (!uuid) {
+          allCalls.push(call);
+        }
+      });
+    }
+  });
+  
+  console.log(`Total merged calls: ${allCalls.length} (unique across all workspaces)`);
+  
+  // Cache the result
   if (session) {
-    session.cachedCalls = {
-      data: allCalls,
-      timestamp: Date.now(),
-      date: date
-    };
-    console.log(`✓ Cached ${allCalls.length} calls for date: ${date}`);
+    session.cachedCalls = { data: allCalls, timestamp: Date.now(), date };
   }
   
   return allCalls;
 };
 
-const calculateCampaignStats = (calls: CallData[]): Map<string, CampaignStats> => {
-  const statsMap = new Map<string, CampaignStats>();
+const isCallConnected = (call: CallData): boolean => {
+  const duration = call.duration || 0;
+  const statusName = call.status?.name?.toLowerCase() || '';
+  const vendorStatusName = call.vendor_status?.name?.toLowerCase() || '';
   
-  calls.forEach(call => {
-    const campaignName = call.campaign?.name;
+  // A call is connected if:
+  // 1. Status contains "completed" (regardless of duration), OR
+  // 2. Vendor status contains "completed", OR
+  // 3. Duration > 0 AND status is NOT "call not connected"
+  const hasCompletedStatus = statusName.includes('completed') || vendorStatusName.includes('completed');
+  const hasDurationAndNotFailed = duration > 0 && !statusName.includes('not connected');
+  
+  return hasCompletedStatus || hasDurationAndNotFailed;
+};
+
+const calculateCampaignStats = (calls: CallData[]): Map<string, CampaignStats> => {
+  const stats = new Map<string, CampaignStats>();
+  
+  for (const call of calls) {
+    const campaignName = call.campaign?.name || 'Unknown Campaign';
     
-    // Skip if no campaign name or if campaign is in exclusion list
-    if (!campaignName || EXCLUDED_CAMPAIGNS.includes(campaignName)) {
-      return;
+    // Skip excluded campaigns
+    if (EXCLUDED_CAMPAIGNS.includes(campaignName)) {
+      continue;
     }
     
-    if (!statsMap.has(campaignName)) {
-      statsMap.set(campaignName, {
+    if (!stats.has(campaignName)) {
+      stats.set(campaignName, {
         name: campaignName,
         live: 0,
         incoming: 0,
         connected: 0,
         totalDuration: 0,
         aht: 0,
-        tfns: new Map()
+        tfns: new Map(),
       });
     }
     
-    const stats = statsMap.get(campaignName)!;
+    const campaignStats = stats.get(campaignName)!;
+    const isLive = call.live === 1;
+    const isQueued = call.queued === 1;
+    const duration = call.duration || 0;
+    const tfn = call.called_number || 'Unknown';
     
-    // Count live calls
-    if (call.live === 1) {
-      stats.live++;
+    // Initialize TFN stats if not exists
+    if (!campaignStats.tfns.has(tfn)) {
+      campaignStats.tfns.set(tfn, { tfn, liveCount: 0, totalDuration: 0, connectedCount: 0, aht: 0 });
     }
     
-    // Count incoming/queued calls
-    if (call.queued === 1) {
-      stats.incoming++;
+    // Track TFN live calls
+    if (isLive) {
+      campaignStats.tfns.get(tfn)!.liveCount++;
+      campaignStats.live++;
     }
     
-    // Count connected calls and duration
-    const statusName = call.status?.name?.toLowerCase() || '';
-    const vendorStatusName = call.vendor_status?.name?.toLowerCase() || '';
-    
-    if (statusName === 'connected' || vendorStatusName === 'answered') {
-      stats.connected++;
-      stats.totalDuration += call.duration || 0;
+    if (isQueued) {
+      campaignStats.incoming++;
     }
+    
+    // Check if call is connected
+    const isConnected = isCallConnected(call);
+    
+    if (isConnected) {
+      campaignStats.connected++;
+      
+      // Only add duration if > 0 (for AHT calculation)
+      if (duration > 0) {
+        campaignStats.totalDuration += duration;
+      }
+      
+      // Track TFN duration and connected count
+      const tfnStats = campaignStats.tfns.get(tfn)!;
+      tfnStats.connectedCount++;
+      
+      if (duration > 0) {
+        tfnStats.totalDuration += duration;
+      }
+    }
+  }
+  
+  // Calculate AHT for campaigns and TFNs
+  stats.forEach(s => {
+    if (s.connected > 0) {
+      s.aht = s.totalDuration / s.connected;
+    }
+    
+    // Calculate AHT for each TFN
+    s.tfns.forEach(tfnStats => {
+      if (tfnStats.connectedCount > 0) {
+        tfnStats.aht = tfnStats.totalDuration / tfnStats.connectedCount;
+      }
+    });
   });
   
-  // Calculate AHT for each campaign
-  statsMap.forEach(stats => {
-    if (stats.connected > 0) {
-      stats.aht = Math.round(stats.totalDuration / stats.connected);
-    }
-  });
-  
-  return statsMap;
+  return stats;
 };
 
-const calculateTFNStats = (calls: CallData[]): TFNStats[] => {
-  const tfnMap = new Map<string, TFNStats>();
-  
-  calls.forEach(call => {
-    const campaignName = call.campaign?.name;
-    
-    // Skip if campaign is in exclusion list
-    if (campaignName && EXCLUDED_CAMPAIGNS.includes(campaignName)) {
-      return;
-    }
-    
-    const tfn = call.called_number;
-    if (!tfn) return;
-    
-    if (!tfnMap.has(tfn)) {
-      tfnMap.set(tfn, {
-        tfn,
-        liveCount: 0,
-        totalDuration: 0,
-        connectedCount: 0,
-        aht: 0
-      });
-    }
-    
-    const stats = tfnMap.get(tfn)!;
-    
-    if (call.live === 1) {
-      stats.liveCount++;
-    }
-    
-    const statusName = call.status?.name?.toLowerCase() || '';
-    const vendorStatusName = call.vendor_status?.name?.toLowerCase() || '';
-    
-    if (statusName === 'connected' || vendorStatusName === 'answered') {
-      stats.connectedCount++;
-      stats.totalDuration += call.duration || 0;
-    }
-  });
-  
-  // Calculate AHT and return sorted
-  const tfnStats = Array.from(tfnMap.values());
-  tfnStats.forEach(stats => {
-    if (stats.connectedCount > 0) {
-      stats.aht = Math.round(stats.totalDuration / stats.connectedCount);
-    }
-  });
-  
-  return tfnStats.sort((a, b) => b.liveCount - a.liveCount);
+const formatDuration = (seconds: number): string => {
+  const minutes = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 };
 
-const getRepeatCallers = (calls: CallData[]): Array<{ number: string; count: number; campaigns: Set<string> }> => {
-  const callerMap = new Map<string, { count: number; campaigns: Set<string> }>();
+const extractCampaignNumber = (campaignName: string): string => {
+  // Check if campaign name matches pattern "Camp XX" or "Campaign XX" (where XX is a number)
+  // If so, extract just the number. Otherwise, return the full campaign name.
+  const campPattern = /^Camp(?:aign)?\s+(\d+)$/i;
+  const match = campaignName.match(campPattern);
   
-  calls.forEach(call => {
-    const campaignName = call.campaign?.name;
+  if (match) {
+    // Return just the number for "Camp 01" -> "01" format
+    return match[1];
+  }
+  
+  // For other formats like "PDSO 02", return the full name
+  return campaignName;
+};
+
+const formatCampaignStats = (stats: Map<string, CampaignStats>, date: string): string => {
+  if (stats.size === 0) return 'No campaigns currently active.';
+  
+  let text = `Campaign Stats (${date})\n\n`;
+  
+  const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
+  
+  sortedStats.forEach((s, index) => {
+    const campaignDisplay = extractCampaignNumber(s.name);
+    text += `Campaign: ${campaignDisplay}\n\n`;
+    text += `∙ Live: ${s.live}\n`;
+    text += `∙ Connected: ${s.connected}\n`;
+    text += `∙ Connected AHT: ${formatDuration(s.aht)}\n`;
     
-    // Skip if campaign is in exclusion list
-    if (campaignName && EXCLUDED_CAMPAIGNS.includes(campaignName)) {
-      return;
-    }
-    
-    const callerNumber = call.caller_number;
-    if (!callerNumber) return;
-    
-    if (!callerMap.has(callerNumber)) {
-      callerMap.set(callerNumber, {
-        count: 0,
-        campaigns: new Set()
-      });
-    }
-    
-    const data = callerMap.get(callerNumber)!;
-    data.count++;
-    
-    if (campaignName) {
-      data.campaigns.add(campaignName);
+    // Add separator line if not the last campaign
+    if (index < sortedStats.length - 1) {
+      text += `\n--------------------------------                           \n\n`;
     }
   });
   
-  return Array.from(callerMap.entries())
-    .filter(([_, data]) => data.count >= 2)
-    .map(([number, data]) => ({
-      number,
-      count: data.count,
-      campaigns: data.campaigns
-    }))
-    .sort((a, b) => b.count - a.count);
+  return text.trim();
+};
+
+const formatTFNStats = (stats: Map<string, CampaignStats>, date: string): string => {
+  if (stats.size === 0) return 'No campaigns currently active.';
+  
+  let text = `Campaign TFN Stats (${date})\n\n`;
+  
+  const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
+  
+  sortedStats.forEach((s, index) => {
+    const campaignDisplay = extractCampaignNumber(s.name);
+    text += `Campaign: ${campaignDisplay}\n\n`;
+    
+    // Sort TFNs by connected calls in descending order (highest first)
+    const sortedTfns = Array.from(s.tfns.values())
+      .filter(tfn => tfn.connectedCount > 0)
+      .sort((a, b) => b.connectedCount - a.connectedCount);
+    
+    if (sortedTfns.length > 0) {
+      text += `∙ TFNs:\n`;
+      
+      // Find the maximum TFN length and count length for alignment
+      const maxTfnLength = Math.max(...sortedTfns.map(tfn => tfn.tfn.length));
+      const maxCountLength = Math.max(...sortedTfns.map(tfn => tfn.connectedCount.toString().length));
+      
+      // Use pre-formatted block for monospace
+      text += '<pre>';
+      
+      sortedTfns.forEach(tfn => {
+        const tfnPadded = tfn.tfn.padEnd(maxTfnLength);
+        const countStr = tfn.connectedCount.toString();
+        const countPadded = countStr.padStart(maxCountLength);
+        
+        text += `  ${tfnPadded}: ${countPadded}    (AHT: ${formatDuration(tfn.aht)})\n`;
+      });
+      
+      text += '</pre>\n';
+    }
+    
+    text += `∙ Live: ${s.live}\n`;
+    text += `∙ Connected: ${s.connected}\n`;
+    text += `∙ Connected AHT: ${formatDuration(s.aht)}\n`;
+    
+    // Add separator line if not the last campaign
+    if (index < sortedStats.length - 1) {
+      text += `\n--------------------------------                           \n\n`;
+    }
+  });
+  
+  return text.trim();
 };
 
 const calculateTotalFlow = (stats: Map<string, CampaignStats>): number => {
-  let totalLive = 0;
+  let total = 0;
   stats.forEach(s => {
-    totalLive += s.live;
+    total += s.live;
   });
-  return totalLive;
+  return total;
+};
+
+const getRepeatCallers = (calls: CallData[]): Map<string, Map<string, number>> => {
+  // Map: campaign -> caller_number -> call count
+  const callerCounts = new Map<string, Map<string, number>>();
+  
+  for (const call of calls) {
+    const campaignName = call.campaign?.name || 'Unknown Campaign';
+    const callerNumber = call.caller_number || 'Unknown';
+    
+    // Skip excluded campaigns
+    if (EXCLUDED_CAMPAIGNS.includes(campaignName)) {
+      continue;
+    }
+    
+    // Only count connected calls
+    if (!isCallConnected(call)) {
+      continue;
+    }
+    
+    if (!callerCounts.has(campaignName)) {
+      callerCounts.set(campaignName, new Map());
+    }
+    
+    const campaignCallers = callerCounts.get(campaignName)!;
+    campaignCallers.set(callerNumber, (campaignCallers.get(callerNumber) || 0) + 1);
+  }
+  
+  return callerCounts;
+};
+
+const formatRepeatCallers = (callerCounts: Map<string, Map<string, number>>, date: string): string => {
+  let text = `IVR Repeat Callers (${date})\n\n`;
+  
+  const sortedCampaigns = Array.from(callerCounts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  let foundAny = false;
+  
+  sortedCampaigns.forEach(([campaignName, callers], campaignIndex) => {
+    // Filter callers with more than 3 calls
+    const repeatCallers = Array.from(callers.entries())
+      .filter(([_, count]) => count > 3)
+      .sort((a, b) => b[1] - a[1]); // Sort by count descending
+    
+    if (repeatCallers.length > 0) {
+      foundAny = true;
+      const campaignDisplay = extractCampaignNumber(campaignName);
+      text += `Campaign: ${campaignDisplay}\n\n`;
+      
+      repeatCallers.forEach(([callerNumber, count]) => {
+        text += `∙ ${callerNumber}: ${count} calls\n`;
+      });
+      
+      // Add separator if not last campaign with data
+      const remainingCampaigns = sortedCampaigns.slice(campaignIndex + 1);
+      const hasMoreWithData = remainingCampaigns.some(([_, callers]) => 
+        Array.from(callers.values()).some(count => count > 3)
+      );
+      
+      if (hasMoreWithData) {
+        text += `\n--------------------------------                           \n\n`;
+      }
+    }
+  });
+  
+  if (!foundAny) {
+    return `IVR Repeat Callers (${date})\n\nNo callers with more than 3 calls found.`;
+  }
+  
+  return text.trim();
 };
 
 const getChatId = (ctx: Context): number => {
   return ctx.chat!.id;
 };
 
+// Helper function to create job key (command-chatId)
+const createJobKey = (commandName: string, chatId: number): string => {
+  return `${commandName}-${chatId}`;
+};
+
+// Helper function to check if chat is processing
 const isChatProcessing = (session: UserSession, chatId: number): boolean => {
   return session.processing.get(chatId) || false;
 };
 
-const setChatProcessing = (session: UserSession, chatId: number, processing: boolean): void => {
-  session.processing.set(chatId, processing);
+// Helper function to set chat processing state
+const setChatProcessing = (session: UserSession, chatId: number, state: boolean): void => {
+  session.processing.set(chatId, state);
 };
 
-// Command handlers
+// Bot commands
 bot.command('start', async (ctx) => {
   const userId = ctx.from!.id;
   const session = getOrCreateSession(userId);
   
-  const parts: string[] = [];
-  parts.push(`Welcome to the Multi-Workspace Call Monitoring Bot!\n\n`);
-  parts.push(`Current date filter: *${session.date}*\n\n`);
-  parts.push(`*Available Commands:*\n`);
-  parts.push(`• /stats [start INTERVAL] - Campaign statistics\n`);
-  parts.push(`• /viewtfns [start INTERVAL] - View TFN statistics with AHT\n`);
-  parts.push(`• /getivr [start INTERVAL] - View repeat callers\n`);
-  parts.push(`• /flow [start INTERVAL] - Check total flow\n`);
-  parts.push(`• /changedate - Change date filter\n`);
-  parts.push(`• /stopauto - Stop autoruns in this channel\n`);
-  parts.push(`• /clear - Clear session data\n`);
-  parts.push(`• /help - Show this help message\n\n`);
-  parts.push(`*Autorun Examples:*\n`);
-  parts.push(`• /stats start 5 - Stats every 5 minutes\n`);
-  parts.push(`• /flow start 10 - Flow check every 10 minutes\n\n`);
-  parts.push(`*Features:*\n`);
-  parts.push(`• Smart caching (${CACHE_TTL_MS/1000}s TTL)\n`);
-  parts.push(`• Channel-isolated autoruns\n`);
-  parts.push(`• Multi-workspace support\n`);
-  parts.push(`• Optimized performance (${CONCURRENT_API_LIMIT} concurrent requests)`);
-  
-  await ctx.reply(parts.join(''), { parse_mode: 'Markdown' });
+  await ctx.reply(
+    `*Welcome to the Campaign Stats Bot!*\n\n` +
+    `*Current Date:* ${session.date}\n` +
+    `*Workspaces:* ${WORKSPACES.length} workspaces configured\n\n` +
+    `*Statistics:*\n` +
+    `/stats [start INTERVAL] — View campaign statistics\n` +
+    `/viewtfns [start INTERVAL] — View TFN-specific statistics with AHT\n` +
+    `/getivr [start INTERVAL] — View repeat callers (>3 calls)\n` +
+    `/flow [start INTERVAL] — Check total flow and alert if below 60\n` +
+    `/stopauto — Stop all autoruns in this channel\n\n` +
+    `*Configuration:*\n` +
+    `/changedate — Change the date filter\n` +
+    `/clear — Clear your session data\n\n` +
+    `*Examples:*\n` +
+    `\`/stats\` — View current campaign stats\n` +
+    `\`/stats start 5\` — Auto-check stats every 5 minutes\n` +
+    `\`/viewtfns start 10\` — Auto-check TFN stats every 10 minutes\n` +
+    `\`/getivr start 15\` — Auto-check repeat callers every 15 minutes\n` +
+    `\`/flow start 3\` — Auto-check flow every 3 minutes\n\n` +
+    `*Note:* The bot fetches data from multiple workspaces simultaneously for faster results. Each channel has independent autoruns. By default, it uses today's date. Use /changedate to analyze a different date.`,
+    { parse_mode: 'Markdown' }
+  );
 });
 
 bot.command('help', async (ctx) => {
   const userId = ctx.from!.id;
   const session = getOrCreateSession(userId);
   
-  const parts: string[] = [];
-  parts.push(`*Multi-Workspace Call Monitoring Bot*\n\n`);
-  parts.push(`Current date: *${session.date}*\n\n`);
-  parts.push(`*Commands:*\n`);
-  parts.push(`• /stats - Campaign statistics\n`);
-  parts.push(`• /viewtfns - TFN statistics with AHT\n`);
-  parts.push(`• /getivr - Repeat callers\n`);
-  parts.push(`• /flow - Total flow check\n`);
-  parts.push(`• /changedate - Change date filter\n`);
-  parts.push(`• /stopauto - Stop autoruns\n`);
-  parts.push(`• /clear - Clear session\n\n`);
-  parts.push(`*Autorun Syntax:*\n`);
-  parts.push(`Add "start INTERVAL" to any command:\n`);
-  parts.push(`Example: /stats start 5\n\n`);
-  parts.push(`*Performance:*\n`);
-  parts.push(`• Cache TTL: ${CACHE_TTL_MS/1000} seconds\n`);
-  parts.push(`• Concurrent requests: ${CONCURRENT_API_LIMIT}\n`);
-  parts.push(`• Workspaces: ${WORKSPACES.length}`);
-  
-  await ctx.reply(parts.join(''), { parse_mode: 'Markdown' });
+  await ctx.reply(
+    `*Campaign Stats Bot Help*\n\n` +
+    `*Current Date:* ${session.date}\n` +
+    `*Workspaces:* ${WORKSPACES.length} workspaces configured\n\n` +
+    `*Statistics:*\n` +
+    `/stats [start INTERVAL] — View campaign statistics\n` +
+    `/viewtfns [start INTERVAL] — View TFN-specific statistics with AHT\n` +
+    `/getivr [start INTERVAL] — View repeat callers (>3 calls)\n` +
+    `/flow [start INTERVAL] — Check total flow and alert if below 60\n` +
+    `/stopauto — Stop all autoruns in this channel\n\n` +
+    `*Configuration:*\n` +
+    `/changedate — Change the date filter\n` +
+    `/clear — Clear your session data\n\n` +
+    `*Examples:*\n` +
+    `\`/stats\` — View current campaign stats\n` +
+    `\`/stats start 5\` — Auto-check stats every 5 minutes\n` +
+    `\`/viewtfns start 10\` — Auto-check TFN stats every 10 minutes\n` +
+    `\`/getivr start 15\` — Auto-check repeat callers every 15 minutes\n` +
+    `\`/flow start 3\` — Auto-check flow every 3 minutes\n\n` +
+    `*Note:* The bot fetches data from multiple workspaces simultaneously. Each channel has independent autoruns. By default, it uses today's date. Use /changedate to analyze a different date.`,
+    { parse_mode: 'Markdown' }
+  );
 });
 
 bot.command('stats', async (ctx) => {
@@ -518,93 +655,52 @@ bot.command('stats', async (ctx) => {
   const session = getOrCreateSession(userId);
   
   if (isChatProcessing(session, chatId)) {
-    return ctx.reply('⏳ A request is already being processed in this channel. Please wait...');
+    return ctx.reply('Please wait, your previous request is still processing...');
   }
   
   setChatProcessing(session, chatId, true);
   
   try {
-    const text = ctx.message.text.trim();
-    const parts = text.split(/\s+/);
+    const args = ctx.message!.text.split(' ').slice(1);
     
-    // Check if autorun requested: /stats start INTERVAL
-    if (parts.length === 3 && parts[1].toLowerCase() === 'start') {
-      const interval = parseInt(parts[2]);
-      if (isNaN(interval) || interval < 1) {
-        setChatProcessing(session, chatId, false);
-        return ctx.reply('Invalid interval. Usage: /stats start INTERVAL (e.g., /stats start 5)');
+    if (args[0] === 'start') {
+      const interval = Math.max(parseInt(args[1]) || 5, 1);
+      const jobKey = createJobKey('stats', chatId);
+      
+      // Stop existing autorun for this command in this channel
+      const existingJob = session.autorunJobs.get(jobKey);
+      if (existingJob) {
+        clearInterval(existingJob.interval);
       }
       
-      const jobKey = `stats-${chatId}`;
-      if (session.autorunJobs.has(jobKey)) {
-        setChatProcessing(session, chatId, false);
-        return ctx.reply(`Stats autorun already running in this channel. Use /stopauto to stop it first.`);
-      }
-      
-      // Initial fetch WITH cache enabled
-      await ctx.reply('Fetching initial campaign statistics...');
-      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, true, session);
+      // Execute immediately (without cache for fresh data)
+      await ctx.reply('Fetching statistics from all workspaces...');
+      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
       const stats = calculateCampaignStats(calls);
+      const text = formatCampaignStats(stats, session.date);
+      await ctx.reply(text, { parse_mode: 'Markdown' });
       
-      const textParts: string[] = [];
-      textParts.push(`*Campaign Statistics (${session.date})*\n\n`);
-      
-      const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
-      sortedStats.forEach(s => {
-        textParts.push(`*${s.name}*\n`);
-        textParts.push(`├ Live: ${s.live}\n`);
-        textParts.push(`├ Incoming: ${s.incoming}\n`);
-        textParts.push(`├ Connected: ${s.connected}\n`);
-        textParts.push(`└ AHT: ${s.aht}s\n\n`);
-      });
-      
-      await ctx.reply(textParts.join(''), { parse_mode: 'Markdown' });
-      
-      // Schedule repeating job WITH cache enabled
+      // Schedule repeating job
       const job = setInterval(async () => {
         try {
-          const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, true, session);
+          const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
           const stats = calculateCampaignStats(calls);
-          
-          const textParts: string[] = [];
-          textParts.push(`*Campaign Statistics (${session.date})*\n\n`);
-          
-          const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
-          sortedStats.forEach(s => {
-            textParts.push(`*${s.name}*\n`);
-            textParts.push(`├ Live: ${s.live}\n`);
-            textParts.push(`├ Incoming: ${s.incoming}\n`);
-            textParts.push(`├ Connected: ${s.connected}\n`);
-            textParts.push(`└ AHT: ${s.aht}s\n\n`);
-          });
-          
-          await ctx.telegram.sendMessage(chatId, textParts.join(''), { parse_mode: 'Markdown' });
+          const text = formatCampaignStats(stats, session.date);
+          await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
         } catch (error: any) {
           console.error('Autorun stats error:', error);
         }
       }, interval * 60 * 1000);
       
       session.autorunJobs.set(jobKey, { interval: job, chatId, commandName: 'stats' });
-      await ctx.reply(`Stats autorun started (every ${interval} minutes, cache: ${CACHE_TTL_MS/1000}s) for date: ${session.date}\nThis autorun is specific to this channel.`);
+      await ctx.reply(`Statistics autorun started (every ${interval} minutes) for date: ${session.date}\nThis autorun is specific to this channel.`);
     } else {
-      // One-time stats WITH cache enabled
-      await ctx.reply('Fetching campaign statistics from all workspaces...');
-      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, true, session);
+      // One-time stats (without cache for fresh data)
+      await ctx.reply('Fetching statistics from all workspaces...');
+      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
       const stats = calculateCampaignStats(calls);
-      
-      const textParts: string[] = [];
-      textParts.push(`*Campaign Statistics (${session.date})*\n\n`);
-      
-      const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
-      sortedStats.forEach(s => {
-        textParts.push(`*${s.name}*\n`);
-        textParts.push(`├ Live: ${s.live}\n`);
-        textParts.push(`├ Incoming: ${s.incoming}\n`);
-        textParts.push(`├ Connected: ${s.connected}\n`);
-        textParts.push(`└ AHT: ${s.aht}s\n\n`);
-      });
-      
-      await ctx.reply(textParts.join(''), { parse_mode: 'Markdown' });
+      const text = formatCampaignStats(stats, session.date);
+      await ctx.reply(text, { parse_mode: 'Markdown' });
     }
   } catch (error: any) {
     await ctx.reply(`Error fetching stats: ${error.message}`);
@@ -619,89 +715,52 @@ bot.command('viewtfns', async (ctx) => {
   const session = getOrCreateSession(userId);
   
   if (isChatProcessing(session, chatId)) {
-    return ctx.reply('⏳ A request is already being processed in this channel. Please wait...');
+    return ctx.reply('Please wait, your previous request is still processing...');
   }
   
   setChatProcessing(session, chatId, true);
   
   try {
-    const text = ctx.message.text.trim();
-    const parts = text.split(/\s+/);
+    const args = ctx.message!.text.split(' ').slice(1);
     
-    if (parts.length === 3 && parts[1].toLowerCase() === 'start') {
-      const interval = parseInt(parts[2]);
-      if (isNaN(interval) || interval < 1) {
-        setChatProcessing(session, chatId, false);
-        return ctx.reply('Invalid interval. Usage: /viewtfns start INTERVAL (e.g., /viewtfns start 5)');
+    if (args[0] === 'start') {
+      const interval = Math.max(parseInt(args[1]) || 5, 1);
+      const jobKey = createJobKey('viewtfns', chatId);
+      
+      // Stop existing autorun for this command in this channel
+      const existingJob = session.autorunJobs.get(jobKey);
+      if (existingJob) {
+        clearInterval(existingJob.interval);
       }
       
-      const jobKey = `viewtfns-${chatId}`;
-      if (session.autorunJobs.has(jobKey)) {
-        setChatProcessing(session, chatId, false);
-        return ctx.reply(`TFN stats autorun already running in this channel. Use /stopauto to stop it first.`);
-      }
+      // Execute immediately (without cache for fresh data)
+      await ctx.reply('Fetching TFN statistics from all workspaces...');
+      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
+      const stats = calculateCampaignStats(calls);
+      const text = formatTFNStats(stats, session.date);
+      await ctx.reply(text, { parse_mode: 'HTML' });
       
-      // Initial fetch WITH cache
-      await ctx.reply('Fetching initial TFN statistics...');
-      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, true, session);
-      const tfnStats = calculateTFNStats(calls);
-      
-      const textParts: string[] = [];
-      textParts.push(`*TFN Statistics (${session.date})*\n\n`);
-      textParts.push(`Total TFNs: ${tfnStats.length}\n\n`);
-      
-      tfnStats.forEach((stats, index) => {
-        textParts.push(`${index + 1}. *${stats.tfn}*\n`);
-        textParts.push(`├ Live: ${stats.liveCount}\n`);
-        textParts.push(`├ Connected: ${stats.connectedCount}\n`);
-        textParts.push(`└ AHT: ${stats.aht}s\n\n`);
-      });
-      
-      await ctx.reply(textParts.join(''), { parse_mode: 'Markdown' });
-      
-      // Schedule repeating job WITH cache
+      // Schedule repeating job
       const job = setInterval(async () => {
         try {
-          const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, true, session);
-          const tfnStats = calculateTFNStats(calls);
-          
-          const textParts: string[] = [];
-          textParts.push(`*TFN Statistics (${session.date})*\n\n`);
-          textParts.push(`Total TFNs: ${tfnStats.length}\n\n`);
-          
-          tfnStats.forEach((stats, index) => {
-            textParts.push(`${index + 1}. *${stats.tfn}*\n`);
-            textParts.push(`├ Live: ${stats.liveCount}\n`);
-            textParts.push(`├ Connected: ${stats.connectedCount}\n`);
-            textParts.push(`└ AHT: ${stats.aht}s\n\n`);
-          });
-          
-          await ctx.telegram.sendMessage(chatId, textParts.join(''), { parse_mode: 'Markdown' });
+          const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
+          const stats = calculateCampaignStats(calls);
+          const text = formatTFNStats(stats, session.date);
+          await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'HTML' });
         } catch (error: any) {
           console.error('Autorun viewtfns error:', error);
         }
       }, interval * 60 * 1000);
       
       session.autorunJobs.set(jobKey, { interval: job, chatId, commandName: 'viewtfns' });
-      await ctx.reply(`TFN stats autorun started (every ${interval} minutes, cache: ${CACHE_TTL_MS/1000}s) for date: ${session.date}\nThis autorun is specific to this channel.`);
+      await ctx.reply(`TFN statistics autorun started (every ${interval} minutes) for date: ${session.date}\nThis autorun is specific to this channel.`);
     } else {
-      // One-time TFN stats WITH cache
+      // One-time TFN stats (without cache for fresh data)
       await ctx.reply('Fetching TFN statistics from all workspaces...');
-      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, true, session);
-      const tfnStats = calculateTFNStats(calls);
-      
-      const textParts: string[] = [];
-      textParts.push(`*TFN Statistics (${session.date})*\n\n`);
-      textParts.push(`Total TFNs: ${tfnStats.length}\n\n`);
-      
-      tfnStats.forEach((stats, index) => {
-        textParts.push(`${index + 1}. *${stats.tfn}*\n`);
-        textParts.push(`├ Live: ${stats.liveCount}\n`);
-        textParts.push(`├ Connected: ${stats.connectedCount}\n`);
-        textParts.push(`└ AHT: ${stats.aht}s\n\n`);
-      });
-      
-      await ctx.reply(textParts.join(''), { parse_mode: 'Markdown' });
+      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
+      const stats = calculateCampaignStats(calls);
+      const text = formatTFNStats(stats, session.date);
+      await ctx.reply(text, { parse_mode: 'HTML' });
     }
   } catch (error: any) {
     await ctx.reply(`Error fetching TFN stats: ${error.message}`);
@@ -716,98 +775,52 @@ bot.command('getivr', async (ctx) => {
   const session = getOrCreateSession(userId);
   
   if (isChatProcessing(session, chatId)) {
-    return ctx.reply('⏳ A request is already being processed in this channel. Please wait...');
+    return ctx.reply('Please wait, your previous request is still processing...');
   }
   
   setChatProcessing(session, chatId, true);
   
   try {
-    const text = ctx.message.text.trim();
-    const parts = text.split(/\s+/);
+    const args = ctx.message!.text.split(' ').slice(1);
     
-    if (parts.length === 3 && parts[1].toLowerCase() === 'start') {
-      const interval = parseInt(parts[2]);
-      if (isNaN(interval) || interval < 1) {
-        setChatProcessing(session, chatId, false);
-        return ctx.reply('Invalid interval. Usage: /getivr start INTERVAL (e.g., /getivr start 5)');
+    if (args[0] === 'start') {
+      const interval = Math.max(parseInt(args[1]) || 15, 1);
+      const jobKey = createJobKey('getivr', chatId);
+      
+      // Stop existing autorun for this command in this channel
+      const existingJob = session.autorunJobs.get(jobKey);
+      if (existingJob) {
+        clearInterval(existingJob.interval);
       }
       
-      const jobKey = `getivr-${chatId}`;
-      if (session.autorunJobs.has(jobKey)) {
-        setChatProcessing(session, chatId, false);
-        return ctx.reply(`IVR autorun already running in this channel. Use /stopauto to stop it first.`);
-      }
+      // Execute immediately (without cache for fresh data)
+      await ctx.reply('Fetching repeat callers from all workspaces...');
+      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
+      const callerCounts = getRepeatCallers(calls);
+      const text = formatRepeatCallers(callerCounts, session.date);
+      await ctx.reply(text, { parse_mode: 'Markdown' });
       
-      // Initial fetch WITH cache
-      await ctx.reply('Fetching initial repeat caller data...');
-      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, true, session);
-      const repeatCallers = getRepeatCallers(calls);
-      
-      const textParts: string[] = [];
-      textParts.push(`*Repeat Callers (${session.date})*\n\n`);
-      textParts.push(`Total repeat callers: ${repeatCallers.length}\n\n`);
-      
-      repeatCallers.slice(0, 50).forEach((caller, index) => {
-        textParts.push(`${index + 1}. ${caller.number}\n`);
-        textParts.push(`├ Calls: ${caller.count}\n`);
-        textParts.push(`└ Campaigns: ${Array.from(caller.campaigns).join(', ')}\n\n`);
-      });
-      
-      if (repeatCallers.length > 50) {
-        textParts.push(`\n_Showing top 50 of ${repeatCallers.length} repeat callers_`);
-      }
-      
-      await ctx.reply(textParts.join(''), { parse_mode: 'Markdown' });
-      
-      // Schedule repeating job WITH cache
+      // Schedule repeating job
       const job = setInterval(async () => {
         try {
-          const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, true, session);
-          const repeatCallers = getRepeatCallers(calls);
-          
-          const textParts: string[] = [];
-          textParts.push(`*Repeat Callers (${session.date})*\n\n`);
-          textParts.push(`Total repeat callers: ${repeatCallers.length}\n\n`);
-          
-          repeatCallers.slice(0, 50).forEach((caller, index) => {
-            textParts.push(`${index + 1}. ${caller.number}\n`);
-            textParts.push(`├ Calls: ${caller.count}\n`);
-            textParts.push(`└ Campaigns: ${Array.from(caller.campaigns).join(', ')}\n\n`);
-          });
-          
-          if (repeatCallers.length > 50) {
-            textParts.push(`\n_Showing top 50 of ${repeatCallers.length} repeat callers_`);
-          }
-          
-          await ctx.telegram.sendMessage(chatId, textParts.join(''), { parse_mode: 'Markdown' });
+          const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
+          const callerCounts = getRepeatCallers(calls);
+          const text = formatRepeatCallers(callerCounts, session.date);
+          await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
         } catch (error: any) {
           console.error('Autorun getivr error:', error);
         }
       }, interval * 60 * 1000);
       
       session.autorunJobs.set(jobKey, { interval: job, chatId, commandName: 'getivr' });
-      await ctx.reply(`Repeat caller autorun started (every ${interval} minutes, cache: ${CACHE_TTL_MS/1000}s) for date: ${session.date}\nThis autorun is specific to this channel.`);
+      await ctx.reply(`Repeat callers autorun started (every ${interval} minutes) for date: ${session.date}\nThis autorun is specific to this channel.`);
     } else {
-      // One-time repeat caller check WITH cache
-      await ctx.reply('Fetching repeat caller data from all workspaces...');
-      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, true, session);
-      const repeatCallers = getRepeatCallers(calls);
-      
-      const textParts: string[] = [];
-      textParts.push(`*Repeat Callers (${session.date})*\n\n`);
-      textParts.push(`Total repeat callers: ${repeatCallers.length}\n\n`);
-      
-      repeatCallers.slice(0, 50).forEach((caller, index) => {
-        textParts.push(`${index + 1}. ${caller.number}\n`);
-        textParts.push(`├ Calls: ${caller.count}\n`);
-        textParts.push(`└ Campaigns: ${Array.from(caller.campaigns).join(', ')}\n\n`);
-      });
-      
-      if (repeatCallers.length > 50) {
-        textParts.push(`\n_Showing top 50 of ${repeatCallers.length} repeat callers_`);
-      }
-      
-      await ctx.reply(textParts.join(''), { parse_mode: 'Markdown' });
+      // One-time repeat callers check (without cache for fresh data)
+      await ctx.reply('Fetching repeat callers from all workspaces...');
+      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
+      const callerCounts = getRepeatCallers(calls);
+      const text = formatRepeatCallers(callerCounts, session.date);
+      await ctx.reply(text, { parse_mode: 'Markdown' });
     }
   } catch (error: any) {
     await ctx.reply(`Error fetching repeat callers: ${error.message}`);
@@ -822,107 +835,100 @@ bot.command('flow', async (ctx) => {
   const session = getOrCreateSession(userId);
   
   if (isChatProcessing(session, chatId)) {
-    return ctx.reply('⏳ A request is already being processed in this channel. Please wait...');
+    return ctx.reply('Please wait, your previous request is still processing...');
   }
   
   setChatProcessing(session, chatId, true);
   
   try {
-    const text = ctx.message.text.trim();
-    const parts = text.split(/\s+/);
+    const args = ctx.message!.text.split(' ').slice(1);
     
-    if (parts.length === 3 && parts[1].toLowerCase() === 'start') {
-      const interval = parseInt(parts[2]);
-      if (isNaN(interval) || interval < 1) {
-        setChatProcessing(session, chatId, false);
-        return ctx.reply('Invalid interval. Usage: /flow start INTERVAL (e.g., /flow start 5)');
+    if (args[0] === 'start') {
+      const interval = Math.max(parseInt(args[1]) || 5, 1);
+      const jobKey = createJobKey('flow', chatId);
+      
+      // Stop existing autorun for this command in this channel
+      const existingJob = session.autorunJobs.get(jobKey);
+      if (existingJob) {
+        clearInterval(existingJob.interval);
       }
       
-      const jobKey = `flow-${chatId}`;
-      if (session.autorunJobs.has(jobKey)) {
-        setChatProcessing(session, chatId, false);
-        return ctx.reply(`Flow check autorun already running in this channel. Use /stopauto to stop it first.`);
-      }
-      
-      // Initial fetch WITH cache
-      await ctx.reply('Fetching initial flow data...');
-      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, true, session);
+      // Execute immediately (without cache for fresh data)
+      await ctx.reply('Checking flow from all workspaces...');
+      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
       const stats = calculateCampaignStats(calls);
       const totalFlow = calculateTotalFlow(stats);
       
-      const textParts: string[] = [];
-      textParts.push(`*Flow Check (${session.date})*\n\n`);
-      textParts.push(`Total Flow: *${totalFlow}* (Live)\n\n`);
+      let text = `*Flow Check (${session.date})*\n\n`;
+      text += `Total Flow: *${totalFlow}* (Live)\n\n`;
       
       if (totalFlow < 60) {
-        textParts.push('*⚠️ ALERT: Check flow Kindly*\n\n');
+        text += '*⚠️ ALERT: Check flow Kindly*\n\n';
       } else {
-        textParts.push('Flow is healthy\n\n');
+        text += 'Flow is healthy\n\n';
       }
       
-      textParts.push('*Campaign Breakdown:*\n');
+      text += '*Campaign Breakdown:*\n';
       const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
       sortedStats.forEach(s => {
-        textParts.push(`• ${s.name} => ${s.live}\n`);
+        text += `• ${s.name} => ${s.live}\n`;
       });
       
-      await ctx.reply(textParts.join(''), { parse_mode: 'Markdown' });
+      await ctx.reply(text, { parse_mode: 'Markdown' });
       
-      // Schedule repeating job WITH cache
+      // Schedule repeating job
       const job = setInterval(async () => {
         try {
-          const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, true, session);
+          const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
           const stats = calculateCampaignStats(calls);
           const totalFlow = calculateTotalFlow(stats);
           
-          const textParts: string[] = [];
-          textParts.push(`*Flow Check (${session.date})*\n\n`);
-          textParts.push(`Total Flow: *${totalFlow}* (Live)\n\n`);
+          let text = `*Flow Check (${session.date})*\n\n`;
+          text += `Total Flow: *${totalFlow}* (Live)\n\n`;
           
           if (totalFlow < 60) {
-            textParts.push('*⚠️ ALERT: Check flow Kindly*\n\n');
+            text += '*⚠️ ALERT: Check flow Kindly*\n\n';
           } else {
-            textParts.push('Flow is healthy\n\n');
+            text += 'Flow is healthy\n\n';
           }
           
-          textParts.push('*Campaign Breakdown:*\n');
+          text += '*Campaign Breakdown:*\n';
           const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
           sortedStats.forEach(s => {
-            textParts.push(`• ${s.name} => ${s.live}\n`);
+            text += `• ${s.name} => ${s.live}\n`;
           });
           
-          await ctx.telegram.sendMessage(chatId, textParts.join(''), { parse_mode: 'Markdown' });
+          await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
         } catch (error: any) {
           console.error('Autorun flow error:', error);
         }
       }, interval * 60 * 1000);
       
       session.autorunJobs.set(jobKey, { interval: job, chatId, commandName: 'flow' });
-      await ctx.reply(`Flow check autorun started (every ${interval} minutes, cache: ${CACHE_TTL_MS/1000}s) for date: ${session.date}\nThis autorun is specific to this channel.`);
+      await ctx.reply(`Flow check autorun started (every ${interval} minutes) for date: ${session.date}\nThis autorun is specific to this channel.`);
     } else {
-      // One-time flow check WITH cache
+      // One-time flow check (without cache for fresh data)
       await ctx.reply('Checking flow from all workspaces...');
-      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, true, session);
+      const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
       const stats = calculateCampaignStats(calls);
       const totalFlow = calculateTotalFlow(stats);
       
-      const textParts: string[] = [];
-      textParts.push(`*Flow Check (${session.date})*\n\n`);
-      textParts.push(`Total Flow: *${totalFlow}* (Live)\n\n`);
+      let text = `*Flow Check (${session.date})*\n\n`;
+      text += `Total Flow: *${totalFlow}* (Live)\n\n`;
       
       if (totalFlow < 60) {
-        textParts.push('*⚠️ ALERT: Check flow Kindly*\n\n');
+        text += '*⚠️ ALERT: Check flow Kindly*\n\n';
       } else {
-        textParts.push('Flow is healthy\n\n');
+        text += 'Flow is healthy\n\n';
       }
       
-      textParts.push('*Campaign Breakdown:*\n');
+      text += '*Campaign Breakdown:*\n';
       const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
       sortedStats.forEach(s => {
-        textParts.push(`• ${s.name} => ${s.live}\n`);
+        text += `• ${s.name} => ${s.live}\n`;
       });
       
-      await ctx.reply(textParts.join(''), { parse_mode: 'Markdown' });
+      await ctx.reply(text, { parse_mode: 'Markdown' });
     }
   } catch (error: any) {
     await ctx.reply(`Error checking flow: ${error.message}`);
@@ -1011,18 +1017,18 @@ bot.on('text', async (ctx) => {
       // Clear cache when date changes
       session.cachedCalls = undefined;
       
-      const parts: string[] = [];
-      parts.push(`Date filter updated to: *${text}*\n\n`);
-      parts.push(`Available commands:\n`);
-      parts.push(`• /stats [start INTERVAL] - Campaign statistics\n`);
-      parts.push(`• /viewtfns [start INTERVAL] - View TFN statistics with AHT\n`);
-      parts.push(`• /getivr [start INTERVAL] - View repeat callers\n`);
-      parts.push(`• /flow [start INTERVAL] - Check total flow\n`);
-      parts.push(`• /changedate - Change date filter\n`);
-      parts.push(`• /stopauto - Stop autoruns in this channel\n`);
-      parts.push(`• /help - Show help`);
-      
-      await ctx.reply(parts.join(''), { parse_mode: 'Markdown' });
+      await ctx.reply(
+        `Date filter updated to: *${text}*\n\n` +
+        `Available commands:\n` +
+        `• /stats [start INTERVAL] - Campaign statistics\n` +
+        `• /viewtfns [start INTERVAL] - View TFN statistics with AHT\n` +
+        `• /getivr [start INTERVAL] - View repeat callers\n` +
+        `• /flow [start INTERVAL] - Check total flow\n` +
+        `• /changedate - Change date filter\n` +
+        `• /stopauto - Stop autoruns in this channel\n` +
+        `• /help - Show help`,
+        { parse_mode: 'Markdown' }
+      );
     } catch (error) {
       await ctx.reply('Invalid date format. Please use YYYY-MM-DD format.\nExample: 2025-11-26');
     }
@@ -1031,16 +1037,14 @@ bot.on('text', async (ctx) => {
 
 // Express routes
 app.get('/', (req, res) => {
-  res.send('Bot is running with multi-workspace support and smart caching');
+  res.send('Bot is running with multi-workspace support and channel-isolated autoruns');
 });
 
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
-    workspaces: WORKSPACES.length,
-    cacheTTL: `${CACHE_TTL_MS/1000}s`,
-    concurrency: CONCURRENT_API_LIMIT
+    workspaces: WORKSPACES.length
   });
 });
 
@@ -1080,12 +1084,9 @@ const startServer = async () => {
   WORKSPACES.forEach((ws, index) => {
     console.log(`  ${index + 1}. ${ws.name}: ${ws.workspace}`);
   });
-  console.log('Performance Settings:');
-  console.log(`  • Cache TTL: ${CACHE_TTL_MS/1000} seconds`);
-  console.log(`  • Concurrent requests: ${CONCURRENT_API_LIMIT}`);
   console.log('Features:');
-  console.log('  • Smart caching with TTL');
   console.log('  • Channel-isolated autoruns');
+  console.log('  • Speed optimized (35 concurrent requests)');
   console.log('  • Per-channel processing locks');
   console.log('='.repeat(60));
   
