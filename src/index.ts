@@ -859,22 +859,20 @@ bot.command('flow', async (ctx) => {
       const stats = calculateCampaignStats(calls);
       const totalFlow = calculateTotalFlow(stats);
       
-      let text = `*Flow Check (${session.date})*\n\n`;
-      text += `Total Flow: *${totalFlow}* (Live)\n\n`;
-      
-      if (totalFlow < 60) {
-        text += '*⚠️ ALERT: Check flow Kindly*\n\n';
-      } else {
-        text += 'Flow is healthy\n\n';
-      }
-      
-      text += '*Campaign Breakdown:*\n';
+      let text = `Flow Check (${session.date})\n\n`;
+      text += 'Campaign Breakdown:\n';
       const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
       sortedStats.forEach(s => {
-        text += `• ${s.name} => ${s.live}\n`;
+        text += `• ${s.name}: ${s.live}\n`;
       });
       
-      await ctx.reply(text, { parse_mode: 'Markdown' });
+      text += `\nTotal Flow: ${totalFlow} (Live)\n`;
+      
+      if (totalFlow < 60) {
+        text += 'ALERT: Low flow, dial kindly';
+      }
+      
+      await ctx.reply(text);
       
       // Schedule repeating job
       const job = setInterval(async () => {
@@ -883,22 +881,20 @@ bot.command('flow', async (ctx) => {
           const stats = calculateCampaignStats(calls);
           const totalFlow = calculateTotalFlow(stats);
           
-          let text = `*Flow Check (${session.date})*\n\n`;
-          text += `Total Flow: *${totalFlow}* (Live)\n\n`;
-          
-          if (totalFlow < 60) {
-            text += '*⚠️ ALERT: Check flow Kindly*\n\n';
-          } else {
-            text += 'Flow is healthy\n\n';
-          }
-          
-          text += '*Campaign Breakdown:*\n';
+          let text = `Flow Check (${session.date})\n\n`;
+          text += 'Campaign Breakdown:\n';
           const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
           sortedStats.forEach(s => {
-            text += `• ${s.name} => ${s.live}\n`;
+            text += `• ${s.name}: ${s.live}\n`;
           });
           
-          await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+          text += `\nTotal Flow: ${totalFlow} (Live)\n`;
+          
+          if (totalFlow < 60) {
+            text += 'ALERT: Low flow, dial kindly';
+          }
+          
+          await ctx.telegram.sendMessage(chatId, text);
         } catch (error: any) {
           console.error('Autorun flow error:', error);
         }
@@ -913,22 +909,20 @@ bot.command('flow', async (ctx) => {
       const stats = calculateCampaignStats(calls);
       const totalFlow = calculateTotalFlow(stats);
       
-      let text = `*Flow Check (${session.date})*\n\n`;
-      text += `Total Flow: *${totalFlow}* (Live)\n\n`;
-      
-      if (totalFlow < 60) {
-        text += '*⚠️ ALERT: Check flow Kindly*\n\n';
-      } else {
-        text += 'Flow is healthy\n\n';
-      }
-      
-      text += '*Campaign Breakdown:*\n';
+      let text = `Flow Check (${session.date})\n\n`;
+      text += 'Campaign Breakdown:\n';
       const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
       sortedStats.forEach(s => {
-        text += `• ${s.name} => ${s.live}\n`;
+        text += `• ${s.name}: ${s.live}\n`;
       });
       
-      await ctx.reply(text, { parse_mode: 'Markdown' });
+      text += `\nTotal Flow: ${totalFlow} (Live)\n`;
+      
+      if (totalFlow < 60) {
+        text += 'ALERT: Low flow, dial kindly';
+      }
+      
+      await ctx.reply(text);
     }
   } catch (error: any) {
     await ctx.reply(`Error checking flow: ${error.message}`);
