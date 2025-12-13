@@ -598,39 +598,33 @@ bot.command('flow', async (ctx) => {
             const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
             const stats = calculateCampaignStats(calls);
             const totalFlow = calculateTotalFlow(stats);
-            let text = `*Flow Check (${session.date})*\n\n`;
-            text += `Total Flow: *${totalFlow}* (Live)\n\n`;
-            if (totalFlow < 60) {
-                text += '*⚠️ ALERT: Check flow Kindly*\n\n';
-            }
-            else {
-                text += 'Flow is healthy\n\n';
-            }
-            text += '*Campaign Breakdown:*\n';
+            let text = `Flow Check (${session.date})\n\n`;
+            text += 'Campaign Breakdown:\n';
             const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
             sortedStats.forEach(s => {
-                text += `• ${s.name} => ${s.live}\n`;
+                text += `• ${s.name} : ${s.live}\n`;
             });
-            await ctx.reply(text, { parse_mode: 'Markdown' });
+            text += `\nTotal Flow: ${totalFlow}(live)\n`;
+            if (totalFlow < 60) {
+                text += 'ALERT: Check flow Kindly';
+            }
+            await ctx.reply(text);
             const job = setInterval(async () => {
                 try {
                     const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
                     const stats = calculateCampaignStats(calls);
                     const totalFlow = calculateTotalFlow(stats);
-                    let text = `*Flow Check (${session.date})*\n\n`;
-                    text += `Total Flow: *${totalFlow}* (Live)\n\n`;
-                    if (totalFlow < 60) {
-                        text += '*⚠️ ALERT: Check flow Kindly*\n\n';
-                    }
-                    else {
-                        text += 'Flow is healthy\n\n';
-                    }
-                    text += '*Campaign Breakdown:*\n';
+                    let text = `Flow Check (${session.date})\n\n`;
+                    text += 'Campaign Breakdown:\n';
                     const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
                     sortedStats.forEach(s => {
-                        text += `• ${s.name} => ${s.live}\n`;
+                        text += `• ${s.name} : ${s.live}\n`;
                     });
-                    await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+                    text += `\nTotal Flow: ${totalFlow}(live)\n`;
+                    if (totalFlow < 60) {
+                        text += 'ALERT: Check flow Kindly';
+                    }
+                    await ctx.telegram.sendMessage(chatId, text);
                 }
                 catch (error) {
                     console.error('Autorun flow error:', error);
@@ -644,20 +638,17 @@ bot.command('flow', async (ctx) => {
             const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
             const stats = calculateCampaignStats(calls);
             const totalFlow = calculateTotalFlow(stats);
-            let text = `*Flow Check (${session.date})*\n\n`;
-            text += `Total Flow: *${totalFlow}* (Live)\n\n`;
-            if (totalFlow < 60) {
-                text += '*⚠️ ALERT: Check flow Kindly*\n\n';
-            }
-            else {
-                text += 'Flow is healthy\n\n';
-            }
-            text += '*Campaign Breakdown:*\n';
+            let text = `Flow Check (${session.date})\n\n`;
+            text += 'Campaign Breakdown:\n';
             const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
             sortedStats.forEach(s => {
-                text += `• ${s.name} => ${s.live}\n`;
+                text += `• ${s.name} : ${s.live}\n`;
             });
-            await ctx.reply(text, { parse_mode: 'Markdown' });
+            text += `\nTotal Flow: ${totalFlow}(live)\n`;
+            if (totalFlow < 60) {
+                text += 'ALERT: Check flow Kindly';
+            }
+            await ctx.reply(text);
         }
     }
     catch (error) {
