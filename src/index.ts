@@ -863,13 +863,13 @@ bot.command('flow', async (ctx) => {
       text += 'Campaign Breakdown:\n';
       const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
       sortedStats.forEach(s => {
-        text += `• ${s.name}: ${s.live}\n`;
+        text += `• ${s.name} : ${s.live}\n`;
       });
       
-      text += `\nTotal Flow: ${totalFlow} (Live)\n`;
+      text += `\nTotal Flow: ${totalFlow}(live)\n`;
       
       if (totalFlow < 60) {
-        text += 'ALERT: Low flow, dial kindly';
+        text += 'ALERT: Check flow Kindly';
       }
       
       await ctx.reply(text);
@@ -885,13 +885,13 @@ bot.command('flow', async (ctx) => {
           text += 'Campaign Breakdown:\n';
           const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
           sortedStats.forEach(s => {
-            text += `• ${s.name}: ${s.live}\n`;
+            text += `• ${s.name} : ${s.live}\n`;
           });
           
-          text += `\nTotal Flow: ${totalFlow} (Live)\n`;
+          text += `\nTotal Flow: ${totalFlow}(live)\n`;
           
           if (totalFlow < 60) {
-            text += 'ALERT: Low flow, dial kindly';
+            text += 'ALERT: Check flow Kindly';
           }
           
           await ctx.telegram.sendMessage(chatId, text);
@@ -913,13 +913,13 @@ bot.command('flow', async (ctx) => {
       text += 'Campaign Breakdown:\n';
       const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
       sortedStats.forEach(s => {
-        text += `• ${s.name}: ${s.live}\n`;
+        text += `• ${s.name} : ${s.live}\n`;
       });
       
-      text += `\nTotal Flow: ${totalFlow} (Live)\n`;
+      text += `\nTotal Flow: ${totalFlow}(live)\n`;
       
       if (totalFlow < 60) {
-        text += 'ALERT: Low flow, dial kindly';
+        text += 'ALERT: Check flow Kindly';
       }
       
       await ctx.reply(text);
