@@ -270,12 +270,12 @@ const formatCampaignStats = (stats, date) => {
     const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
     sortedStats.forEach((s, index) => {
         const campaignDisplay = extractCampaignNumber(s.name);
-        text += `Campaign: ${campaignDisplay}\n\n`;
+        text += `Campaign: ${campaignDisplay}\n`;
         text += `∙ Live: ${s.live}\n`;
         text += `∙ Connected: ${s.connected}\n`;
         text += `∙ Connected AHT: ${formatDuration(s.aht)}\n`;
         if (index < sortedStats.length - 1) {
-            text += `\n--------------------------------                           \n\n`;
+            text += `--------------------------------                           \n`;
         }
     });
     return text.trim();
@@ -308,7 +308,7 @@ const formatTFNStats = (stats, date) => {
         text += `∙ Connected: ${s.connected}\n`;
         text += `∙ Connected AHT: ${formatDuration(s.aht)}\n`;
         if (index < sortedStats.length - 1) {
-            text += `\n--------------------------------                           \n\n`;
+            text += `--------------------------------                           \n`;
         }
     });
     return text.trim();
@@ -357,7 +357,7 @@ const formatRepeatCallers = (callerCounts, date) => {
             const remainingCampaigns = sortedCampaigns.slice(campaignIndex + 1);
             const hasMoreWithData = remainingCampaigns.some(([_, callers]) => Array.from(callers.values()).some(count => count > 3));
             if (hasMoreWithData) {
-                text += `\n--------------------------------                           \n\n`;
+                text += `--------------------------------                           \n`;
             }
         }
     });
@@ -601,14 +601,19 @@ bot.command('flow', async (ctx) => {
             let text = `*Flow Check (${session.date})*\n\n`;
             text += '*Campaign Breakdown:*\n';
             const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
+            const maxNameLength = Math.max(...sortedStats.map(s => s.name.replace(/-/g, '').length));
+            text += '<pre>';
             sortedStats.forEach(s => {
-                text += `• ${s.name} : ${s.live}\n`;
+                const cleanName = s.name.replace(/-/g, '');
+                const paddedName = cleanName.padEnd(maxNameLength);
+                text += `${paddedName}: ${s.live}\n`;
             });
-            text += `\n*Total Flow:* ${totalFlow}(live)\n`;
+            text += '</pre>\n';
+            text += `*Total Flow:* ${totalFlow}(live)\n`;
             if (totalFlow < 60) {
                 text += '*ALERT:* Check Flow Kindly';
             }
-            await ctx.reply(text, { parse_mode: 'Markdown' });
+            await ctx.reply(text, { parse_mode: 'HTML' });
             const job = setInterval(async () => {
                 try {
                     const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
@@ -617,14 +622,19 @@ bot.command('flow', async (ctx) => {
                     let text = `*Flow Check (${session.date})*\n\n`;
                     text += '*Campaign Breakdown:*\n';
                     const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
+                    const maxNameLength = Math.max(...sortedStats.map(s => s.name.replace(/-/g, '').length));
+                    text += '<pre>';
                     sortedStats.forEach(s => {
-                        text += `• ${s.name} : ${s.live}\n`;
+                        const cleanName = s.name.replace(/-/g, '');
+                        const paddedName = cleanName.padEnd(maxNameLength);
+                        text += `${paddedName}: ${s.live}\n`;
                     });
-                    text += `\n*Total Flow:* ${totalFlow}(live)\n`;
+                    text += '</pre>\n';
+                    text += `*Total Flow:* ${totalFlow}(live)\n`;
                     if (totalFlow < 60) {
                         text += '*ALERT:* Check Flow Kindly';
                     }
-                    await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+                    await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'HTML' });
                 }
                 catch (error) {
                     console.error('Autorun flow error:', error);
@@ -641,14 +651,19 @@ bot.command('flow', async (ctx) => {
             let text = `*Flow Check (${session.date})*\n\n`;
             text += '*Campaign Breakdown:*\n';
             const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
+            const maxNameLength = Math.max(...sortedStats.map(s => s.name.replace(/-/g, '').length));
+            text += '<pre>';
             sortedStats.forEach(s => {
-                text += `• ${s.name} : ${s.live}\n`;
+                const cleanName = s.name.replace(/-/g, '');
+                const paddedName = cleanName.padEnd(maxNameLength);
+                text += `${paddedName}: ${s.live}\n`;
             });
-            text += `\n*Total Flow:* ${totalFlow}(live)\n`;
+            text += '</pre>\n';
+            text += `*Total Flow:* ${totalFlow}(live)\n`;
             if (totalFlow < 60) {
                 text += '*ALERT:* Check Flow Kindly';
             }
-            await ctx.reply(text, { parse_mode: 'Markdown' });
+            await ctx.reply(text, { parse_mode: 'HTML' });
         }
     }
     catch (error) {
