@@ -859,8 +859,8 @@ bot.command('flow', async (ctx) => {
       const stats = calculateCampaignStats(calls);
       const totalFlow = calculateTotalFlow(stats);
       
-      let text = `*Flow Check (${session.date})*\n\n`;
-      text += '*Campaign Breakdown:*\n';
+      let text = `<b>Flow Check (${session.date})</b>\n\n`;
+      text += '<b>Campaign Breakdown:</b>\n';
       
       // Get sorted stats and find max name length for justified alignment
       const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
@@ -875,10 +875,10 @@ bot.command('flow', async (ctx) => {
       });
       text += '</pre>\n';
       
-      text += `*Total Flow:* ${totalFlow}(live)\n`;
+      text += `<b>Total Flow:</b> ${totalFlow}(live)\n`;
       
       if (totalFlow < 60) {
-        text += '*ALERT:* Check Flow Kindly';
+        text += '<b>ALERT:</b> Check Flow Kindly';
       }
       
       await ctx.reply(text, { parse_mode: 'HTML' });
@@ -890,8 +890,8 @@ bot.command('flow', async (ctx) => {
           const stats = calculateCampaignStats(calls);
           const totalFlow = calculateTotalFlow(stats);
           
-          let text = `*Flow Check (${session.date})*\n\n`;
-          text += '*Campaign Breakdown:*\n';
+          let text = `<b>Flow Check (${session.date})</b>\n\n`;
+          text += '<b>Campaign Breakdown:</b>\n';
           
           // Get sorted stats and find max name length for justified alignment
           const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
@@ -906,10 +906,10 @@ bot.command('flow', async (ctx) => {
           });
           text += '</pre>\n';
           
-          text += `*Total Flow:* ${totalFlow}(live)\n`;
+          text += `<b>Total Flow:</b>= ${totalFlow}(live)\n`;
           
           if (totalFlow < 60) {
-            text += '*ALERT:* Check Flow Kindly';
+            text += '<b>ALERT:</b> Check Flow Kindly';
           }
           
           await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'HTML' });
@@ -927,8 +927,8 @@ bot.command('flow', async (ctx) => {
       const stats = calculateCampaignStats(calls);
       const totalFlow = calculateTotalFlow(stats);
       
-      let text = `*Flow Check (${session.date})*\n\n`;
-      text += '*Campaign Breakdown:*\n';
+      let text = `<b>Flow Check (${session.date})</b>\n\n`;
+      text += '<b>Campaign Breakdown:</b>\n';
       
       // Get sorted stats and find max name length for justified alignment
       const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
@@ -943,10 +943,10 @@ bot.command('flow', async (ctx) => {
       });
       text += '</pre>\n';
       
-      text += `*Total Flow:* ${totalFlow}(live)\n`;
+      text += `<b>Total Flow:</b> ${totalFlow}(live)\n`;
       
       if (totalFlow < 60) {
-        text += '*ALERT:* Check Flow Kindly';
+        text += '<b>ALERT:</b> Check Flow Kindly';
       }
       
       await ctx.reply(text, { parse_mode: 'HTML' });

@@ -598,8 +598,8 @@ bot.command('flow', async (ctx) => {
             const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
             const stats = calculateCampaignStats(calls);
             const totalFlow = calculateTotalFlow(stats);
-            let text = `*Flow Check (${session.date})*\n\n`;
-            text += '*Campaign Breakdown:*\n';
+            let text = `<b>Flow Check (${session.date})</b>\n\n`;
+            text += '<b>Campaign Breakdown:</b>\n';
             const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
             const maxNameLength = Math.max(...sortedStats.map(s => s.name.replace(/-/g, '').length));
             text += '<pre>';
@@ -609,9 +609,9 @@ bot.command('flow', async (ctx) => {
                 text += `${paddedName}: ${s.live}\n`;
             });
             text += '</pre>\n';
-            text += `*Total Flow:* ${totalFlow}(live)\n`;
+            text += `<b>Total Flow:</b> ${totalFlow}(live)\n`;
             if (totalFlow < 60) {
-                text += '*ALERT:* Check Flow Kindly';
+                text += '<b>ALERT:</b> Check Flow Kindly';
             }
             await ctx.reply(text, { parse_mode: 'HTML' });
             const job = setInterval(async () => {
@@ -619,8 +619,8 @@ bot.command('flow', async (ctx) => {
                     const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
                     const stats = calculateCampaignStats(calls);
                     const totalFlow = calculateTotalFlow(stats);
-                    let text = `*Flow Check (${session.date})*\n\n`;
-                    text += '*Campaign Breakdown:*\n';
+                    let text = `<b>Flow Check (${session.date})</b>\n\n`;
+                    text += '<b>Campaign Breakdown:</b>\n';
                     const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
                     const maxNameLength = Math.max(...sortedStats.map(s => s.name.replace(/-/g, '').length));
                     text += '<pre>';
@@ -630,9 +630,9 @@ bot.command('flow', async (ctx) => {
                         text += `${paddedName}: ${s.live}\n`;
                     });
                     text += '</pre>\n';
-                    text += `*Total Flow:* ${totalFlow}(live)\n`;
+                    text += `<b>Total Flow:</b>= ${totalFlow}(live)\n`;
                     if (totalFlow < 60) {
-                        text += '*ALERT:* Check Flow Kindly';
+                        text += '<b>ALERT:</b> Check Flow Kindly';
                     }
                     await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'HTML' });
                 }
@@ -648,8 +648,8 @@ bot.command('flow', async (ctx) => {
             const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
             const stats = calculateCampaignStats(calls);
             const totalFlow = calculateTotalFlow(stats);
-            let text = `*Flow Check (${session.date})*\n\n`;
-            text += '*Campaign Breakdown:*\n';
+            let text = `<b>Flow Check (${session.date})</b>\n\n`;
+            text += '<b>Campaign Breakdown:</b>\n';
             const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
             const maxNameLength = Math.max(...sortedStats.map(s => s.name.replace(/-/g, '').length));
             text += '<pre>';
@@ -659,9 +659,9 @@ bot.command('flow', async (ctx) => {
                 text += `${paddedName}: ${s.live}\n`;
             });
             text += '</pre>\n';
-            text += `*Total Flow:* ${totalFlow}(live)\n`;
+            text += `<b>Total Flow:</b> ${totalFlow}(live)\n`;
             if (totalFlow < 60) {
-                text += '*ALERT:* Check Flow Kindly';
+                text += '<b>ALERT:</b> Check Flow Kindly';
             }
             await ctx.reply(text, { parse_mode: 'HTML' });
         }
