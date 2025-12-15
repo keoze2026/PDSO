@@ -432,7 +432,7 @@ const formatCampaignStats = (stats: Map<string, CampaignStats>, date: string): s
   
   sortedStats.forEach((s, index) => {
     const campaignDisplay = extractCampaignNumber(s.name);
-    text += `Campaign: ${campaignDisplay}\n\n`;
+    text += `Campaign: ${campaignDisplay}\n`;
     text += `∙ Live: ${s.live}\n`;
     text += `∙ Connected: ${s.connected}\n`;
     text += `∙ Connected AHT: ${formatDuration(s.aht)}\n`;
@@ -861,18 +861,26 @@ bot.command('flow', async (ctx) => {
       
       let text = `*Flow Check (${session.date})*\n\n`;
       text += '*Campaign Breakdown:*\n';
-      const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
-      sortedStats.forEach(s => {
-        text += `• ${s.name} : ${s.live}\n`;
-      });
       
-      text += `\n*Total Flow:* ${totalFlow}(live)\n`;
+      // Get sorted stats and find max name length for justified alignment
+      const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
+      const maxNameLength = Math.max(...sortedStats.map(s => s.name.length));
+      
+      // Use HTML pre tag for monospace formatting
+      text += '<pre>';
+      sortedStats.forEach(s => {
+        const paddedName = s.name.padEnd(maxNameLength);
+        text += `${paddedName}: ${s.live}\n`;
+      });
+      text += '</pre>\n';
+      
+      text += `*Total Flow:* ${totalFlow}(live)\n`;
       
       if (totalFlow < 60) {
         text += '*ALERT:* Check Flow Kindly';
       }
       
-      await ctx.reply(text, { parse_mode: 'Markdown' });
+      await ctx.reply(text, { parse_mode: 'HTML' });
       
       // Schedule repeating job
       const job = setInterval(async () => {
@@ -883,18 +891,26 @@ bot.command('flow', async (ctx) => {
           
           let text = `*Flow Check (${session.date})*\n\n`;
           text += '*Campaign Breakdown:*\n';
-          const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
-          sortedStats.forEach(s => {
-            text += `• ${s.name} : ${s.live}\n`;
-          });
           
-          text += `\n*Total Flow:* ${totalFlow}(live)\n`;
+          // Get sorted stats and find max name length for justified alignment
+          const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
+          const maxNameLength = Math.max(...sortedStats.map(s => s.name.length));
+          
+          // Use HTML pre tag for monospace formatting
+          text += '<pre>';
+          sortedStats.forEach(s => {
+            const paddedName = s.name.padEnd(maxNameLength);
+            text += `${paddedName}: ${s.live}\n`;
+          });
+          text += '</pre>\n';
+          
+          text += `*Total Flow:* ${totalFlow}(live)\n`;
           
           if (totalFlow < 60) {
             text += '*ALERT:* Check Flow Kindly';
           }
           
-          await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+          await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'HTML' });
         } catch (error: any) {
           console.error('Autorun flow error:', error);
         }
@@ -911,18 +927,26 @@ bot.command('flow', async (ctx) => {
       
       let text = `*Flow Check (${session.date})*\n\n`;
       text += '*Campaign Breakdown:*\n';
-      const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
-      sortedStats.forEach(s => {
-        text += `• ${s.name} : ${s.live}\n`;
-      });
       
-      text += `\n*Total Flow:* ${totalFlow}(live)\n`;
+      // Get sorted stats and find max name length for justified alignment
+      const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
+      const maxNameLength = Math.max(...sortedStats.map(s => s.name.length));
+      
+      // Use HTML pre tag for monospace formatting
+      text += '<pre>';
+      sortedStats.forEach(s => {
+        const paddedName = s.name.padEnd(maxNameLength);
+        text += `${paddedName}: ${s.live}\n`;
+      });
+      text += '</pre>\n';
+      
+      text += `*Total Flow:* ${totalFlow}(live)\n`;
       
       if (totalFlow < 60) {
         text += '*ALERT:* Check Flow Kindly';
       }
       
-      await ctx.reply(text, { parse_mode: 'Markdown' });
+      await ctx.reply(text, { parse_mode: 'HTML' });
     }
   } catch (error: any) {
     await ctx.reply(`Error checking flow: ${error.message}`);
