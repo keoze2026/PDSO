@@ -439,7 +439,7 @@ const formatCampaignStats = (stats: Map<string, CampaignStats>, date: string): s
     
     // Add separator line if not the last campaign
     if (index < sortedStats.length - 1) {
-      text += `\n--------------------------------                           \n\n`;
+      text += `--------------------------------                           \n`;
     }
   });
   
@@ -489,7 +489,7 @@ const formatTFNStats = (stats: Map<string, CampaignStats>, date: string): string
     
     // Add separator line if not the last campaign
     if (index < sortedStats.length - 1) {
-      text += `\n--------------------------------                           \n\n`;
+      text += `--------------------------------                           \n`;
     }
   });
   
@@ -561,7 +561,7 @@ const formatRepeatCallers = (callerCounts: Map<string, Map<string, number>>, dat
       );
       
       if (hasMoreWithData) {
-        text += `\n--------------------------------                           \n\n`;
+        text += `--------------------------------                           \n`;
       }
     }
   });
@@ -864,12 +864,13 @@ bot.command('flow', async (ctx) => {
       
       // Get sorted stats and find max name length for justified alignment
       const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
-      const maxNameLength = Math.max(...sortedStats.map(s => s.name.length));
+      const maxNameLength = Math.max(...sortedStats.map(s => s.name.replace(/-/g, '').length));
       
       // Use HTML pre tag for monospace formatting
       text += '<pre>';
       sortedStats.forEach(s => {
-        const paddedName = s.name.padEnd(maxNameLength);
+        const cleanName = s.name.replace(/-/g, '');
+        const paddedName = cleanName.padEnd(maxNameLength);
         text += `${paddedName}: ${s.live}\n`;
       });
       text += '</pre>\n';
@@ -894,12 +895,13 @@ bot.command('flow', async (ctx) => {
           
           // Get sorted stats and find max name length for justified alignment
           const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
-          const maxNameLength = Math.max(...sortedStats.map(s => s.name.length));
+          const maxNameLength = Math.max(...sortedStats.map(s => s.name.replace(/-/g, '').length));
           
           // Use HTML pre tag for monospace formatting
           text += '<pre>';
           sortedStats.forEach(s => {
-            const paddedName = s.name.padEnd(maxNameLength);
+            const cleanName = s.name.replace(/-/g, '');
+            const paddedName = cleanName.padEnd(maxNameLength);
             text += `${paddedName}: ${s.live}\n`;
           });
           text += '</pre>\n';
@@ -930,12 +932,13 @@ bot.command('flow', async (ctx) => {
       
       // Get sorted stats and find max name length for justified alignment
       const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
-      const maxNameLength = Math.max(...sortedStats.map(s => s.name.length));
+      const maxNameLength = Math.max(...sortedStats.map(s => s.name.replace(/-/g, '').length));
       
       // Use HTML pre tag for monospace formatting
       text += '<pre>';
       sortedStats.forEach(s => {
-        const paddedName = s.name.padEnd(maxNameLength);
+        const cleanName = s.name.replace(/-/g, '');
+        const paddedName = cleanName.padEnd(maxNameLength);
         text += `${paddedName}: ${s.live}\n`;
       });
       text += '</pre>\n';
