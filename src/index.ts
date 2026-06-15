@@ -1,28 +1,33 @@
 // src/index.ts
+import 'dotenv/config';
 import express from 'express';
 import { Telegraf, Context } from 'telegraf';
 import axios from 'axios';
 import pLimit from 'p-limit';
 
 // Configuration
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8067862927:AAF15wt-h8YGfXhtdN0kOXu3MQf-zGX0gWU';
-const WEBHOOK_URL = process.env.WEBHOOK_URL || '';
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const PORT = parseInt(process.env.PORT || '8080');
-const BASE_API = 'https://api-gateway.dialics.com/api/v1';
+const BASE_API = process.env.BASE_API || 'https://api-gateway.dialics.com/api/v1';
+
+// Validate required environment variables
+if (!TELEGRAM_BOT_TOKEN) {
+  throw new Error('TELEGRAM_BOT_TOKEN is required in .env file');
+}
 
 // Workspace configurations
 const WORKSPACES = [
   {
-    name: 'Workspace 1',
-    workspace: 'aq2O7TXNfZl7H6kjhm2LEw8OI2rJwLwD',
-    token: '463907|nVI45fhW3Dq12lUTLUWwRQyeu2Iy1Z078lHSwbIxtD2H4g0LxVjax6gj0b6kEwbVnfJjYpiHSVcXMeCyXF8rgI8OzHA2PzfmntTNZYbsIhGOmCfdlzafKSGmja479fmsf8TK0jxOhM4dKDUOR2vGE44fmInqfFUvdba0WgfgXwWJVn9YjD6TGfLGTIXnTjUTDK0ynOIYXNX65KqgvjfEuvfuiuleW6LedDjR0DeowL4lKFQkZbWfOgqwa8cmqO8u'
+    name: process.env.WORKSPACE_1_NAME || 'Workspace 1',
+    workspace: process.env.WORKSPACE_1_ID || '',
+    token: process.env.WORKSPACE_1_TOKEN || ''
   },
   {
-    name: 'Workspace 2',
-    workspace: '08tMnbNzs66wzR6yVGf8LmabJwDQqrWq',
-    token: '469458|Q7EX5xHoFzB3reLeBiyzwOm9GU1L1v8XSnVJmuIazoTw6DkKCwE8ff6mjVBr1hux8ru4zBAlRPniQBpHPvqrtR9NKat8SIP7hQpOrjk78kd3WU51aSgraIH2lBxUDYf9NTu2sPDcTDdsfbp0MR9gDXmo2VQoREnNqUk1ODsIkHbCNquG8uj1ufRH61SCdTR9kI75QI5qfo9iWKWzUd9201OLDrN5HeUDT4lsC4AKCAUGJ1RVj6GyIdsoi9nlVcau'
+    name: process.env.WORKSPACE_2_NAME || 'Workspace 2',
+    workspace: process.env.WORKSPACE_2_ID || '',
+    token: process.env.WORKSPACE_2_TOKEN || ''
   }
-];
+].filter(ws => ws.workspace && ws.token); // Filter out workspaces with missing credentials
 
 // Campaigns to exclude from all statistics and reports
 const EXCLUDED_CAMPAIGNS = [
@@ -1069,37 +1074,8 @@ app.get('/health', (req, res) => {
   });
 });
 
-app.post('/webhook', (req, res) => {
-  bot.handleUpdate(req.body);
-  res.sendStatus(200);
-});
-
-app.get('/webhook_info', async (req, res) => {
-  try {
-    const info = await bot.telegram.getWebhookInfo();
-    res.json(info);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // Start server
 const startServer = async () => {
-  if (!WEBHOOK_URL) {
-    console.error('='.repeat(60));
-    console.error('CRITICAL: WEBHOOK_URL environment variable is not set!');
-    console.error('Please set WEBHOOK_URL to your deployment URL');
-    console.error('Example: https://yourapp.render.com');
-    console.error('='.repeat(60));
-  } else {
-    const webhookUrl = `${WEBHOOK_URL}/webhook`;
-    await bot.telegram.setWebhook(webhookUrl);
-    console.log(`Webhook set to: ${webhookUrl}`);
-    
-    const info = await bot.telegram.getWebhookInfo();
-    console.log('Webhook info:', info);
-  }
-  
   console.log('='.repeat(60));
   console.log(`Configured workspaces: ${WORKSPACES.length}`);
   WORKSPACES.forEach((ws, index) => {
@@ -1110,12 +1086,19 @@ const startServer = async () => {
   console.log('  • Speed optimized (35 concurrent requests)');
   console.log('  • Per-channel processing locks');
   console.log('='.repeat(60));
-  
+
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`Default date for new sessions: ${getCurrentDate()}`);
-    console.log('Bot is ready to receive updates via webhook');
   });
+
+  // Start bot in polling mode
+  await bot.launch();
+  console.log('Bot is running in polling mode');
+
+  // Enable graceful stop
+  process.once('SIGINT', () => bot.stop('SIGINT'));
+  process.once('SIGTERM', () => bot.stop('SIGTERM'));
 };
 
 startServer().catch((error) => {
