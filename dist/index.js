@@ -10,7 +10,7 @@ const axios_1 = __importDefault(require("axios"));
 const p_limit_1 = __importDefault(require("p-limit"));
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const PORT = parseInt(process.env.PORT || '8080');
-const BASE_API = process.env.BASE_API || 'https://api-gateway.dialics.com/api/v1';
+const BASE_API = process.env.BASE_API || 'https://public-api.revocalls.com/api/v1';
 if (!TELEGRAM_BOT_TOKEN) {
     throw new Error('TELEGRAM_BOT_TOKEN is required in .env file');
 }
@@ -24,10 +24,15 @@ const WORKSPACES = [
         name: process.env.WORKSPACE_2_NAME || 'Workspace 2',
         workspace: process.env.WORKSPACE_2_ID || '',
         token: process.env.WORKSPACE_2_TOKEN || ''
+    },
+    {
+        name: process.env.WORKSPACE_3_NAME || 'Workspace 3',
+        workspace: process.env.WORKSPACE_3_ID || '',
+        token: process.env.WORKSPACE_3_TOKEN || ''
     }
 ].filter(ws => ws.workspace && ws.token);
 const EXCLUDED_CAMPAIGNS = [
-    '11 Camp Ext', 'BBB 2', 'BBB', 'AdsTerra'
+    '11 Camp Ext', 'Camp-BBB 2', 'Camp-BBB', 'Camp - AdsTerra', 'Camp - BB2', 'Camp - BB1', 'Adsterra 2', '062026', 'Adsterra'
 ];
 const userSessions = new Map();
 const bot = new telegraf_1.Telegraf(TELEGRAM_BOT_TOKEN);
@@ -673,54 +678,6 @@ bot.command('flow', async (ctx) => {
     }
     catch (error) {
         await ctx.reply(`Error checking flow: ${error.message}`);
-    }
-    finally {
-        setChatProcessing(session, chatId, false);
-    }
-});
-bot.command('listcampaigns', async (ctx) => {
-    const userId = ctx.from.id;
-    const chatId = getChatId(ctx);
-    const session = getOrCreateSession(userId);
-    if (isChatProcessing(session, chatId)) {
-        return ctx.reply('Please wait, your previous request is still processing...');
-    }
-    setChatProcessing(session, chatId, true);
-    try {
-        await ctx.reply('Fetching campaigns from all workspaces...');
-        const allCampaigns = [];
-        for (const workspace of WORKSPACES) {
-            try {
-                const response = await apiGet(workspace.workspace, workspace.token, 'campaigns', {});
-                if (response.success && response.payload?.data) {
-                    const campaigns = response.payload.data.map((campaign) => ({
-                        name: campaign.name || 'Unknown',
-                        workspace: workspace.name,
-                        id: campaign.id || 'N/A'
-                    }));
-                    allCampaigns.push(...campaigns);
-                }
-            }
-            catch (error) {
-                console.error(`Error fetching campaigns from ${workspace.name}:`, error);
-            }
-        }
-        if (allCampaigns.length === 0) {
-            await ctx.reply('No campaigns found in any workspace.');
-        }
-        else {
-            let text = `<b>Campaign List</b>\n\n`;
-            text += `<b>Total Campaigns:</b> ${allCampaigns.length}\n\n`;
-            const sortedCampaigns = allCampaigns.sort((a, b) => a.name.localeCompare(b.name));
-            sortedCampaigns.forEach((campaign, index) => {
-                text += `${index + 1}. ${campaign.name}\n`;
-                text += `   <i>Workspace: ${campaign.workspace}</i>\n\n`;
-            });
-            await ctx.reply(text, { parse_mode: 'HTML' });
-        }
-    }
-    catch (error) {
-        await ctx.reply(`Error fetching campaigns: ${error.message}`);
     }
     finally {
         setChatProcessing(session, chatId, false);

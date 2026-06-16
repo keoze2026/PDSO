@@ -26,12 +26,17 @@ const WORKSPACES = [
     name: process.env.WORKSPACE_2_NAME || 'Workspace 2',
     workspace: process.env.WORKSPACE_2_ID || '',
     token: process.env.WORKSPACE_2_TOKEN || ''
+  },
+  {
+    name: process.env.WORKSPACE_3_NAME || 'Workspace 3',
+    workspace: process.env.WORKSPACE_3_ID || '',
+    token: process.env.WORKSPACE_3_TOKEN || ''
   }
 ].filter(ws => ws.workspace && ws.token); // Filter out workspaces with missing credentials
 
 // Campaigns to exclude from all statistics and reports
 const EXCLUDED_CAMPAIGNS = [
-  '11 Camp Ext', 'Camp-BBB 2', 'Camp-BBB', 'Camp - AdsTerra'
+  '11 Camp Ext', 'Camp-BBB 2', 'Camp-BBB', 'Camp - AdsTerra', 'Camp - BB2', 'Camp - BB1', 'Adsterra 2', '062026', 'Adsterra'
 ];
 
 // Types
@@ -960,61 +965,6 @@ bot.command('flow', async (ctx) => {
     }
   } catch (error: any) {
     await ctx.reply(`Error checking flow: ${error.message}`);
-  } finally {
-    setChatProcessing(session, chatId, false);
-  }
-});
-
-bot.command('listcampaigns', async (ctx) => {
-  const userId = ctx.from!.id;
-  const chatId = getChatId(ctx);
-  const session = getOrCreateSession(userId);
-
-  if (isChatProcessing(session, chatId)) {
-    return ctx.reply('Please wait, your previous request is still processing...');
-  }
-
-  setChatProcessing(session, chatId, true);
-
-  try {
-    await ctx.reply('Fetching campaigns from all workspaces...');
-
-    const allCampaigns: any[] = [];
-
-    for (const workspace of WORKSPACES) {
-      try {
-        const response = await apiGet(workspace.workspace, workspace.token, 'campaigns', {});
-
-        if (response.success && response.payload?.data) {
-          const campaigns = response.payload.data.map((campaign: any) => ({
-            name: campaign.name || 'Unknown',
-            workspace: workspace.name,
-            id: campaign.id || 'N/A'
-          }));
-          allCampaigns.push(...campaigns);
-        }
-      } catch (error: any) {
-        console.error(`Error fetching campaigns from ${workspace.name}:`, error);
-      }
-    }
-
-    if (allCampaigns.length === 0) {
-      await ctx.reply('No campaigns found in any workspace.');
-    } else {
-      let text = `<b>Campaign List</b>\n\n`;
-      text += `<b>Total Campaigns:</b> ${allCampaigns.length}\n\n`;
-
-      const sortedCampaigns = allCampaigns.sort((a, b) => a.name.localeCompare(b.name));
-
-      sortedCampaigns.forEach((campaign, index) => {
-        text += `${index + 1}. ${campaign.name}\n`;
-        text += `   <i>Workspace: ${campaign.workspace}</i>\n\n`;
-      });
-
-      await ctx.reply(text, { parse_mode: 'HTML' });
-    }
-  } catch (error: any) {
-    await ctx.reply(`Error fetching campaigns: ${error.message}`);
   } finally {
     setChatProcessing(session, chatId, false);
   }
