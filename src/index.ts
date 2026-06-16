@@ -569,7 +569,7 @@ const formatRepeatCallers = (callerCounts: Map<string, Map<string, number>>, dat
       text += `Campaign: ${campaignDisplay}\n\n`;
       
       repeatCallers.forEach(([callerNumber, count]) => {
-        text += `∙ ${callerNumber}: ${count} calls\n`;
+        text += `∙ ${callerNumber}: ${count} IVR\n`;
       });
       
       // Add separator if not last campaign with data
@@ -585,7 +585,7 @@ const formatRepeatCallers = (callerCounts: Map<string, Map<string, number>>, dat
   });
   
   if (!foundAny) {
-    return `IVR Repeat Callers (${date})\n\nNo callers with more than 3 calls found.`;
+    return `IVR Repeat Callers (${date})\n\nNo callers with more than 3 IVR found.`;
   }
   
   return text.trim();
