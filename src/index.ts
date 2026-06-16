@@ -354,8 +354,8 @@ const calculateCampaignStats = (calls: CallData[]): Map<string, CampaignStats> =
     }
     
     const campaignStats = stats.get(campaignName)!;
-    const isLive = call.live === 1;
-    const isQueued = call.queued === 1;
+    const isLive = call.live == 1; // Use loose equality to handle both string and number
+    const isQueued = call.queued == 1; // Use loose equality to handle both string and number
     const duration = call.duration || 0;
     const tfn = call.called_number || 'Unknown';
     
@@ -877,7 +877,7 @@ bot.command('flow', async (ctx) => {
       // Get sorted stats and find max name length for justified alignment
       const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
       const maxNameLength = Math.max(...sortedStats.map(s => s.name.replace(/-/g, '').length));
-      
+
       // Use HTML pre tag for monospace formatting
       text += '<pre>';
       sortedStats.forEach(s => {
@@ -907,13 +907,13 @@ bot.command('flow', async (ctx) => {
           
           // Get sorted stats and find max name length for justified alignment
           const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
-          const maxNameLength = Math.max(...sortedStats.map(s => s.name.replace(/-/g, '').length));
-          
+          const maxNameLength = Math.max(...sortedStats.map(s => extractCampaignNumber(s.name).length));
+
           // Use HTML pre tag for monospace formatting
           text += '<pre>';
           sortedStats.forEach(s => {
-            const cleanName = s.name.replace(/-/g, '');
-            const paddedName = cleanName.padEnd(maxNameLength);
+            const campaignDisplay = extractCampaignNumber(s.name);
+            const paddedName = campaignDisplay.padEnd(maxNameLength);
             text += `${paddedName}: ${s.live}\n`;
           });
           text += '</pre>\n';
@@ -945,7 +945,7 @@ bot.command('flow', async (ctx) => {
       // Get sorted stats and find max name length for justified alignment
       const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
       const maxNameLength = Math.max(...sortedStats.map(s => s.name.replace(/-/g, '').length));
-      
+
       // Use HTML pre tag for monospace formatting
       text += '<pre>';
       sortedStats.forEach(s => {

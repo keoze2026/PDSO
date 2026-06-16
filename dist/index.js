@@ -219,8 +219,8 @@ const calculateCampaignStats = (calls) => {
             });
         }
         const campaignStats = stats.get(campaignName);
-        const isLive = call.live === 1;
-        const isQueued = call.queued === 1;
+        const isLive = call.live == 1;
+        const isQueued = call.queued == 1;
         const duration = call.duration || 0;
         const tfn = call.called_number || 'Unknown';
         if (!campaignStats.tfns.has(tfn)) {
@@ -632,11 +632,11 @@ bot.command('flow', async (ctx) => {
                     let text = `<b>Flow Check (${session.date})</b>\n\n`;
                     text += '<b>Campaign Breakdown:</b>\n';
                     const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
-                    const maxNameLength = Math.max(...sortedStats.map(s => s.name.replace(/-/g, '').length));
+                    const maxNameLength = Math.max(...sortedStats.map(s => extractCampaignNumber(s.name).length));
                     text += '<pre>';
                     sortedStats.forEach(s => {
-                        const cleanName = s.name.replace(/-/g, '');
-                        const paddedName = cleanName.padEnd(maxNameLength);
+                        const campaignDisplay = extractCampaignNumber(s.name);
+                        const paddedName = campaignDisplay.padEnd(maxNameLength);
                         text += `${paddedName}: ${s.live}\n`;
                     });
                     text += '</pre>\n';
