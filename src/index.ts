@@ -31,7 +31,7 @@ const WORKSPACES = [
 
 // Campaigns to exclude from all statistics and reports
 const EXCLUDED_CAMPAIGNS = [
-  '11 Camp Ext', 'BBB 2', 'BBB', 'AdsTerra'
+  '11 Camp Ext', 'Camp-BBB 2', 'Camp-BBB', 'Camp - AdsTerra'
 ];
 
 // Types

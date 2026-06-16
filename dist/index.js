@@ -27,7 +27,7 @@ const WORKSPACES = [
     }
 ].filter(ws => ws.workspace && ws.token);
 const EXCLUDED_CAMPAIGNS = [
-    '11 Camp Ext', 'CAMP-BBB 2', 'CAMP-BBB', 'CAMP-AdsTerra'
+    '11 Camp Ext', 'BBB 2', 'BBB', 'AdsTerra'
 ];
 const userSessions = new Map();
 const bot = new telegraf_1.Telegraf(TELEGRAM_BOT_TOKEN);
