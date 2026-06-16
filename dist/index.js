@@ -328,6 +328,13 @@ const calculateTotalFlow = (stats) => {
     });
     return total;
 };
+const calculateTotalConnected = (stats) => {
+    let total = 0;
+    stats.forEach(s => {
+        total += s.connected;
+    });
+    return total;
+};
 const getRepeatCallers = (calls) => {
     const callerCounts = new Map();
     for (const call of calls) {
@@ -608,6 +615,7 @@ bot.command('flow', async (ctx) => {
             const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
             const stats = calculateCampaignStats(calls);
             const totalFlow = calculateTotalFlow(stats);
+            const totalConnected = calculateTotalConnected(stats);
             let text = `<b>Flow Check (${session.date})</b>\n\n`;
             text += '<b>Campaign Breakdown:</b>\n';
             const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
@@ -621,29 +629,32 @@ bot.command('flow', async (ctx) => {
             text += '</pre>\n';
             text += `<b>Total Flow:</b> ${totalFlow}(live)\n`;
             if (totalFlow < 60) {
-                text += '<b>ALERT:</b> Check Flow Kindly';
+                text += '<b>ALERT:</b> Check Flow Kindly\n';
             }
+            text += `\n<b>Total Connected:</b> ${totalConnected}`;
             await ctx.reply(text, { parse_mode: 'HTML' });
             const job = setInterval(async () => {
                 try {
                     const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
                     const stats = calculateCampaignStats(calls);
                     const totalFlow = calculateTotalFlow(stats);
+                    const totalConnected = calculateTotalConnected(stats);
                     let text = `<b>Flow Check (${session.date})</b>\n\n`;
                     text += '<b>Campaign Breakdown:</b>\n';
                     const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
-                    const maxNameLength = Math.max(...sortedStats.map(s => extractCampaignNumber(s.name).length));
+                    const maxNameLength = Math.max(...sortedStats.map(s => s.name.replace(/-/g, '').length));
                     text += '<pre>';
                     sortedStats.forEach(s => {
-                        const campaignDisplay = extractCampaignNumber(s.name);
-                        const paddedName = campaignDisplay.padEnd(maxNameLength);
+                        const cleanName = s.name.replace(/-/g, '');
+                        const paddedName = cleanName.padEnd(maxNameLength);
                         text += `${paddedName}: ${s.live}\n`;
                     });
                     text += '</pre>\n';
                     text += `<b>Total Flow:</b>= ${totalFlow}(live)\n`;
                     if (totalFlow < 60) {
-                        text += '<b>ALERT:</b> Check Flow Kindly';
+                        text += '<b>ALERT:</b> Check Flow Kindly\n';
                     }
+                    text += `\n<b>Total Connected:</b> ${totalConnected}`;
                     await ctx.telegram.sendMessage(chatId, text, { parse_mode: 'HTML' });
                 }
                 catch (error) {
@@ -658,6 +669,7 @@ bot.command('flow', async (ctx) => {
             const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
             const stats = calculateCampaignStats(calls);
             const totalFlow = calculateTotalFlow(stats);
+            const totalConnected = calculateTotalConnected(stats);
             let text = `<b>Flow Check (${session.date})</b>\n\n`;
             text += '<b>Campaign Breakdown:</b>\n';
             const sortedStats = Array.from(stats.values()).sort((a, b) => a.name.localeCompare(b.name));
@@ -671,8 +683,9 @@ bot.command('flow', async (ctx) => {
             text += '</pre>\n';
             text += `<b>Total Flow:</b> ${totalFlow}(live)\n`;
             if (totalFlow < 60) {
-                text += '<b>ALERT:</b> Check Flow Kindly';
+                text += '<b>ALERT:</b> Check Flow Kindly\n';
             }
+            text += `\n<b>Total Connected:</b> ${totalConnected}`;
             await ctx.reply(text, { parse_mode: 'HTML' });
         }
     }
