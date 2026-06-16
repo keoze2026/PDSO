@@ -27,7 +27,7 @@ const WORKSPACES = [
     }
 ].filter(ws => ws.workspace && ws.token);
 const EXCLUDED_CAMPAIGNS = [
-    '11 Camp Ext'
+    '11 Camp Ext', 'CAMP-BBB 2', 'CAMP-BBB', 'CAMP-AdsTerra'
 ];
 const userSessions = new Map();
 const bot = new telegraf_1.Telegraf(TELEGRAM_BOT_TOKEN);
@@ -392,6 +392,7 @@ bot.command('start', async (ctx) => {
         `/viewtfns [start INTERVAL] — View TFN-specific statistics with AHT\n` +
         `/getivr [start INTERVAL] — View repeat callers (>3 calls)\n` +
         `/flow [start INTERVAL] — Check total flow and alert if below 60\n` +
+        `/listcampaigns — List all campaigns from workspaces\n` +
         `/stopauto — Stop all autoruns in this channel\n\n` +
         `*Configuration:*\n` +
         `/changedate — Change the date filter\n` +
@@ -415,6 +416,7 @@ bot.command('help', async (ctx) => {
         `/viewtfns [start INTERVAL] — View TFN-specific statistics with AHT\n` +
         `/getivr [start INTERVAL] — View repeat callers (>3 calls)\n` +
         `/flow [start INTERVAL] — Check total flow and alert if below 60\n` +
+        `/listcampaigns — List all campaigns from workspaces\n` +
         `/stopauto — Stop all autoruns in this channel\n\n` +
         `*Configuration:*\n` +
         `/changedate — Change the date filter\n` +
@@ -671,6 +673,54 @@ bot.command('flow', async (ctx) => {
     }
     catch (error) {
         await ctx.reply(`Error checking flow: ${error.message}`);
+    }
+    finally {
+        setChatProcessing(session, chatId, false);
+    }
+});
+bot.command('listcampaigns', async (ctx) => {
+    const userId = ctx.from.id;
+    const chatId = getChatId(ctx);
+    const session = getOrCreateSession(userId);
+    if (isChatProcessing(session, chatId)) {
+        return ctx.reply('Please wait, your previous request is still processing...');
+    }
+    setChatProcessing(session, chatId, true);
+    try {
+        await ctx.reply('Fetching campaigns from all workspaces...');
+        const allCampaigns = [];
+        for (const workspace of WORKSPACES) {
+            try {
+                const response = await apiGet(workspace.workspace, workspace.token, 'campaigns', {});
+                if (response.success && response.payload?.data) {
+                    const campaigns = response.payload.data.map((campaign) => ({
+                        name: campaign.name || 'Unknown',
+                        workspace: workspace.name,
+                        id: campaign.id || 'N/A'
+                    }));
+                    allCampaigns.push(...campaigns);
+                }
+            }
+            catch (error) {
+                console.error(`Error fetching campaigns from ${workspace.name}:`, error);
+            }
+        }
+        if (allCampaigns.length === 0) {
+            await ctx.reply('No campaigns found in any workspace.');
+        }
+        else {
+            let text = `<b>Campaign List</b>\n\n`;
+            text += `<b>Total Campaigns:</b> ${allCampaigns.length}\n\n`;
+            const sortedCampaigns = allCampaigns.sort((a, b) => a.name.localeCompare(b.name));
+            sortedCampaigns.forEach((campaign, index) => {
+                text += `${index + 1}. ${campaign.name}\n`;
+                text += `   <i>Workspace: ${campaign.workspace}</i>\n\n`;
+            });
+            await ctx.reply(text, { parse_mode: 'HTML' });
+        }
+    }
+    catch (error) {
+        await ctx.reply(`Error fetching campaigns: ${error.message}`);
     }
     finally {
         setChatProcessing(session, chatId, false);
