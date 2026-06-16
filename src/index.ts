@@ -8,7 +8,7 @@ import pLimit from 'p-limit';
 // Configuration
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const PORT = parseInt(process.env.PORT || '8080');
-const BASE_API = process.env.BASE_API || 'https://api-gateway.dialics.com/api/v1';
+const BASE_API = process.env.BASE_API || 'https://public-api.revocalls.com/api/v1';
 
 // Validate required environment variables
 if (!TELEGRAM_BOT_TOKEN) {
