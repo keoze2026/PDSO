@@ -556,20 +556,22 @@ const formatRepeatCallers = (callerCounts: Map<string, Map<string, number>>, dat
   
   const sortedCampaigns = Array.from(callerCounts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
   let foundAny = false;
-  
+  let totalIvr = 0;
+
   sortedCampaigns.forEach(([campaignName, callers], campaignIndex) => {
     // Filter callers with more than 3 calls
     const repeatCallers = Array.from(callers.entries())
       .filter(([_, count]) => count > 3)
       .sort((a, b) => b[1] - a[1]); // Sort by count descending
-    
+
     if (repeatCallers.length > 0) {
       foundAny = true;
       const campaignDisplay = extractCampaignNumber(campaignName);
       text += `Campaign: ${campaignDisplay}\n\n`;
-      
+
       repeatCallers.forEach(([callerNumber, count]) => {
-        text += `∙ ${callerNumber}: ${count} calls\n`;
+        text += `∙ ${callerNumber}: ${count} IVR\n`;
+        totalIvr += count;
       });
       
       // Add separator if not last campaign with data
@@ -585,10 +587,13 @@ const formatRepeatCallers = (callerCounts: Map<string, Map<string, number>>, dat
   });
   
   if (!foundAny) {
-    return `IVR Repeat Callers (${date})\n\nNo callers with more than 3 calls found.`;
+    return `IVR Repeat Callers (${date})\n\nNo callers with more than 3 IVR found.`;
   }
-  
-  return text.trim();
+
+  text = text.trim();
+  text += `\n\nTOTAL IVR: ${totalIvr}`;
+
+  return text;
 };
 
 const getChatId = (ctx: Context): number => {
