@@ -552,7 +552,7 @@ const getRepeatCallers = (calls: CallData[]): Map<string, Map<string, number>> =
 };
 
 const formatRepeatCallers = (callerCounts: Map<string, Map<string, number>>, date: string): string => {
-  let text = `IVR Repeat Callers (${date})\n\n`;
+  let text = `IVR Callers (${date})\n\n`;
   
   const sortedCampaigns = Array.from(callerCounts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
   let foundAny = false;
@@ -592,7 +592,7 @@ const formatRepeatCallers = (callerCounts: Map<string, Map<string, number>>, dat
 
   text = text.trim();
   text += `\n\nTOTAL IVR: ${totalIvr}`;
-  text += `\n\n*IVR  CALLER'S (${date})*`;
+  
 
   return text;
 };
