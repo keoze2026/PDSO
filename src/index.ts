@@ -592,6 +592,7 @@ const formatRepeatCallers = (callerCounts: Map<string, Map<string, number>>, dat
 
   text = text.trim();
   text += `\n\nTOTAL IVR: ${totalIvr}`;
+  text += `\n\n*IVR  CALLER'S (${date})*`;
 
   return text;
 };
