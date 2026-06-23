@@ -820,7 +820,7 @@ bot.command('getivr', async (ctx) => {
       }
       
       // Execute immediately (without cache for fresh data)
-      await ctx.reply('Fetching repeat callers from all workspaces...');
+      await ctx.reply('Fetching IVR & Fake Caller from all Workspaces...');
       const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
       const callerCounts = getRepeatCallers(calls);
       const text = formatRepeatCallers(callerCounts, session.date);
@@ -842,7 +842,7 @@ bot.command('getivr', async (ctx) => {
       await ctx.reply(`Repeat callers autorun started (every ${interval} minutes) for date: ${session.date}\nThis autorun is specific to this channel.`);
     } else {
       // One-time repeat callers check (without cache for fresh data)
-      await ctx.reply('Fetching repeat callers from all workspaces...');
+      await ctx.reply('Fetching IVR & Fake Caller from all Workspaces...');
       const calls = await fetchAllCallsFromMultipleWorkspaces(WORKSPACES, session.date, false, session);
       const callerCounts = getRepeatCallers(calls);
       const text = formatRepeatCallers(callerCounts, session.date);
